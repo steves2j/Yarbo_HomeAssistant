@@ -1,2 +1,3 @@
 # Yarbo_HomeAssistant
-Yarbo Homeassistant addon.
+Yarbo Home Assistant addon.
+
