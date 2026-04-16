@@ -44,14 +44,47 @@ See [CHANGELOG.md](CHANGELOG.md) for feature history.
 
 ```text
 .
+├── .github/workflows/          # Validation workflows
 ├── .homeassistant/              # Local Home Assistant config directory
 ├── custom_components/
 │   └── yarbo/                   # Yarbo custom integration
 ├── scripts/                     # Local workflow helpers
 ├── CHANGELOG.md                 # Project change log
+├── LICENSE                      # Distribution license
 ├── docker-compose.yml           # Local Home Assistant instance
+├── hacs.json                    # HACS metadata
 ├── pyproject.toml               # Ruff configuration
 └── requirements-dev.txt         # Optional local tooling
+```
+
+## Install in Home Assistant
+
+### HACS
+
+Once this repository is published and available on GitHub, the recommended install path is HACS.
+
+1. Open `HACS -> Integrations`
+2. Open the menu and choose `Custom repositories`
+3. Add:
+   - Repository: `https://github.com/steves2j/Yarbo_HomeAssistant`
+   - Category: `Integration`
+4. Search for `Yarbo Home Assistant Integration`
+5. Install it
+6. Restart Home Assistant
+7. Add the integration from `Settings -> Devices & Services`
+
+### Manual install
+
+1. Copy `custom_components/yarbo` into your Home Assistant config directory under `custom_components/`
+2. Restart Home Assistant
+3. Add the integration from `Settings -> Devices & Services`
+
+Example target path:
+
+```text
+<config>/
+└── custom_components/
+    └── yarbo/
 ```
 
 ## Quick start
@@ -73,7 +106,7 @@ In Home Assistant:
 1. Open `Settings`
 2. Open `Devices & Services`
 3. Click `Add Integration`
-4. Search for `Yarbo`
+4. Search for `Yarbo Home Assistant Integration`
 5. Enter:
    - broker host/IP
    - port
@@ -89,6 +122,29 @@ In Home Assistant:
 source .venv/bin/activate
 ./scripts/lint.sh
 ```
+
+## Release and distribution notes
+
+The repository now includes the minimum scaffolding for a normal HACS-style custom integration release:
+
+- `hacs.json`
+- `LICENSE`
+- GitHub workflow for HACS validation
+- GitHub workflow for `hassfest`
+
+For a clean public release:
+
+1. Push the repository to GitHub
+2. Make sure the repository description, topics, and branding are set appropriately on GitHub
+3. Bump `custom_components/yarbo/manifest.json` `version`
+4. Update `CHANGELOG.md`
+5. Create a GitHub release/tag that matches the integration version
+6. Verify the GitHub Actions pass
+
+If the GitHub repository URL changes, update:
+
+- `custom_components/yarbo/manifest.json`
+- this README
 
 ## Home Assistant UI
 

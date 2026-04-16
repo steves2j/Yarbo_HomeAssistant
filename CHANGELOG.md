@@ -56,10 +56,14 @@ The format loosely follows Keep a Changelog and uses semantic versioning where p
 - Automatic stale-data refresh if the current summary is missing or older than one hour
 - Wi-Fi details from `get_connect_wifi_name`
 - Local brand assets for the integration
+- HACS metadata via `hacs.json`
+- MIT license for distribution
+- GitHub Actions for HACS validation and `hassfest`
 - Initial project documentation and development workflow notes
 
 ### Changed
 
+- Distribution-facing name updated to `Yarbo Home Assistant Integration`
 - README updated from scaffold-level setup notes to current integration behavior and UI usage
 - Button styling updated to use MDI icons and compact icon-only controls where appropriate
 - Shutdown and restart actions now require an explicit enable step before use

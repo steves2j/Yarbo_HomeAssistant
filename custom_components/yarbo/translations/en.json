@@ -1,9 +1,9 @@
 {
-  "title": "Yarbo",
+  "title": "Yarbo Home Assistant Integration",
   "config": {
     "step": {
       "user": {
-        "title": "Add Yarbo",
+        "title": "Add Yarbo Integration",
         "description": "Connect Yarbo to a remote MQTT broker and subscribe to this device's topic.",
         "data": {
           "name": "Display name",
@@ -14,7 +14,7 @@
         }
       },
       "reconfigure": {
-        "title": "Reconfigure Yarbo",
+        "title": "Reconfigure Yarbo Integration",
         "description": "Update the Yarbo MQTT broker settings and serial number.",
         "data": {
           "name": "Display name",
@@ -31,7 +31,7 @@
       "serial_number_required": "Enter a Yarbo serial number."
     },
     "abort": {
-      "reconfigure_successful": "Yarbo was updated."
+      "reconfigure_successful": "Yarbo integration was updated."
     }
   },
   "entity": {

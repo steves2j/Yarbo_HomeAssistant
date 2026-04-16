@@ -1,6 +1,6 @@
 {
   "domain": "yarbo",
-  "name": "Yarbo",
+  "name": "Yarbo Home Assistant Integration",
   "version": "0.1.0",
   "documentation": "https://github.com/steves2j/Yarbo_HomeAssistant",
   "issue_tracker": "https://github.com/steves2j/Yarbo_HomeAssistant/issues",
