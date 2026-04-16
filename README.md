@@ -13,6 +13,10 @@ The integration is currently MQTT-first. It subscribes to `snowbot/<serial>/#`, 
 
 See [CHANGELOG.md](CHANGELOG.md) for feature history.
 
+## Overview snapshot
+
+![Yarbo Home Assistant overview widget](example.jpg)
+
 ## Current capabilities
 
 - Config flow with:
