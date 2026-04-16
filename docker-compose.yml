@@ -1,0 +1,12 @@
+services:
+  homeassistant:
+    container_name: yarbo-homeassistant-dev
+    image: ${HOME_ASSISTANT_IMAGE:-ghcr.io/home-assistant/home-assistant:stable}
+    restart: unless-stopped
+    ports:
+      - "${HOME_ASSISTANT_PORT:-8123}:8123"
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./.homeassistant:/config
+      - ./custom_components:/config/custom_components

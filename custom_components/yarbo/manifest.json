@@ -1,0 +1,21 @@
+{
+  "domain": "yarbo",
+  "name": "Yarbo",
+  "version": "0.1.0",
+  "documentation": "https://github.com/steves2j/Yarbo_HomeAssistant",
+  "issue_tracker": "https://github.com/steves2j/Yarbo_HomeAssistant/issues",
+  "codeowners": [
+    "@steves2j"
+  ],
+  "config_flow": true,
+  "integration_type": "device",
+  "dependencies": [],
+  "iot_class": "local_push",
+  "requirements": [
+    "paho-mqtt==2.1.0"
+  ],
+  "loggers": [
+    "custom_components.yarbo",
+    "paho"
+  ]
+}

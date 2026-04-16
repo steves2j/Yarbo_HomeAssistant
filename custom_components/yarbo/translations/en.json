@@ -1,0 +1,47 @@
+{
+  "title": "Yarbo",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Yarbo",
+        "description": "Connect Yarbo to a remote MQTT broker and subscribe to this device's topic.",
+        "data": {
+          "name": "Display name",
+          "host": "Broker host or IP address",
+          "port": "Broker port",
+          "tls": "Use TLS",
+          "serial_number": "Yarbo serial number"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Yarbo",
+        "description": "Update the Yarbo MQTT broker settings and serial number.",
+        "data": {
+          "name": "Display name",
+          "host": "Broker host or IP address",
+          "port": "Broker port",
+          "tls": "Use TLS",
+          "serial_number": "Yarbo serial number"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Enter a display name.",
+      "host_required": "Enter a broker host or IP address.",
+      "serial_number_required": "Enter a Yarbo serial number."
+    },
+    "abort": {
+      "reconfigure_successful": "Yarbo was updated."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "integration_status": {
+        "name": "MQTT connection"
+      },
+      "discovered_topics": {
+        "name": "Discovered MQTT topics"
+      }
+    }
+  }
+}

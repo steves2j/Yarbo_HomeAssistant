@@ -1,0 +1,41 @@
+# Local Home Assistant dev instance
+.homeassistant/*
+!.homeassistant/configuration.yaml
+!.homeassistant/automations.yaml
+!.homeassistant/scenes.yaml
+!.homeassistant/scripts.yaml
+!.homeassistant/secrets.yaml.example
+!.homeassistant/packages/
+!.homeassistant/packages/**
+
+# Home Assistant runtime state
+.homeassistant/.HA_VERSION
+.homeassistant/.cloud/
+.homeassistant/.data/
+.homeassistant/.ha_run.lock
+.homeassistant/.storage/
+.homeassistant/backups/
+.homeassistant/blueprints/
+.homeassistant/custom_components/
+.homeassistant/deps/
+.homeassistant/home-assistant.log*
+.homeassistant/home-assistant_v2.db*
+.homeassistant/tts/
+.homeassistant/www/community/
+
+# Python / tooling
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+__pycache__/
+*.py[cod]
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
