@@ -113,6 +113,7 @@ def parse_device_message_payload(
     net = _as_dict(payload.get("NetMSG"))
     body = _as_dict(payload.get("BodyMsg"))
     wireless_recharge = _as_dict(payload.get("wireless_recharge"))
+    abnormal = _as_dict(payload.get("abnormal_msg"))
 
     location = _parse_gga_sentence(_as_str(rover.get("gngga")))
     fix_quality = _as_int(location.get("fix_quality")) if location else None
@@ -129,6 +130,10 @@ def parse_device_message_payload(
         "working_state_label": None,
         "charging_status": _as_int(state.get("charging_status")),
         "error_code": _as_int(state.get("error_code")),
+        "plan_msg": _as_str(state.get("plan_msg")),
+        "schedule_msg": _as_str(state.get("schedule_msg")),
+        "auto_draw_waiting_state": _as_int(state.get("auto_draw_waiting_state")),
+        "machine_controller": _as_int(state.get("machine_controller")),
         "self_check_status": _as_int(state.get("self_check_status")),
         "robot_follow_state": _as_bool(state.get("robot_follow_state")),
         "planning_paused": _as_bool(state.get("planning_paused")),
@@ -158,6 +163,8 @@ def parse_device_message_payload(
         "ntrip_service_status": _as_int(net.get("ntrip_service")),
         "dns_status": _as_int(net.get("dns")),
         "wireless_recharge_state": _as_int(wireless_recharge.get("state")),
+        "wireless_recharge_error_code": _as_int(wireless_recharge.get("error_code")),
+        "abnormal_error_code": _as_int(abnormal.get("error_code")),
         "combined_odom_x": _as_float(combined_odom.get("x")),
         "combined_odom_y": _as_float(combined_odom.get("y")),
         "combined_odom_heading": _as_float(combined_odom.get("phi")),

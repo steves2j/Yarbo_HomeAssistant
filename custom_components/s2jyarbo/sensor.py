@@ -113,6 +113,9 @@ class YarboStatusSensor(YarboBaseSensor):
             "working_state_source": summary.get("working_state_source"),
             "charging_status": summary.get("charging_status"),
             "error_code": summary.get("error_code"),
+            "plan_msg": summary.get("plan_msg"),
+            "schedule_msg": summary.get("schedule_msg"),
+            "machine_controller": summary.get("machine_controller"),
             "heading": summary.get("heading"),
             "rtk_fix_label": summary.get("rtk_fix_label"),
             "summary_source": summary.get("summary_source"),
@@ -127,6 +130,12 @@ class YarboStatusSensor(YarboBaseSensor):
             "longitude": location.get("longitude"),
             "heartbeat_received_at": summary.get("heartbeat_received_at"),
             "updated_at": summary.get("updated_at"),
+            "notification_count": state.notification_count,
+            "last_notification_level": (state.last_notification or {}).get("level"),
+            "last_notification_title": (state.last_notification or {}).get("title"),
+            "last_notification_message": (state.last_notification or {}).get("message"),
+            "last_notification_at": (state.last_notification or {}).get("received_at"),
+            "recent_notifications": state.notification_history[-5:],
         }
 
 

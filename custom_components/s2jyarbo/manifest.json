@@ -1,19 +1,20 @@
 {
-  "domain": "yarbo",
-  "name": "Yarbo Home Assistant Integration",
+  "domain": "s2jyarbo",
+  "name": "S2JYarbo Home Assistant Integration",
   "codeowners": [
     "@steves2j"
   ],
   "config_flow": true,
   "dependencies": [
-    "http"
+    "http",
+    "persistent_notification"
   ],
   "documentation": "https://github.com/steves2j/Yarbo_HomeAssistant",
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/steves2j/Yarbo_HomeAssistant/issues",
   "loggers": [
-    "custom_components.yarbo",
+    "custom_components.s2jyarbo",
     "paho"
   ],
   "requirements": [

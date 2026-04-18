@@ -135,7 +135,7 @@ class YarboOverviewCard extends HTMLElement {
     this._loadingDashboard = true;
 
     try {
-      this._entries = await this._hass.callApi("GET", "yarbo/dashboard");
+      this._entries = await this._hass.callApi("GET", "s2jyarbo/dashboard");
       for (const entry of this._entries) {
         if (!this._trailPreferenceInitialized.has(entry.entry_id)) {
           this._hiddenBreadcrumbEntries.add(entry.entry_id);
@@ -233,7 +233,7 @@ class YarboOverviewCard extends HTMLElement {
     }
 
     try {
-      await this._hass.callApi("POST", "yarbo/request_map", {
+      await this._hass.callApi("POST", "s2jyarbo/request_map", {
         entry_id: entryId,
       });
     } catch (_err) {
@@ -284,7 +284,7 @@ class YarboOverviewCard extends HTMLElement {
     this._render();
 
     try {
-      const response = await this._hass.callApi("POST", "yarbo/refresh_device_data", {
+      const response = await this._hass.callApi("POST", "s2jyarbo/refresh_device_data", {
         entry_id: entryId,
       });
       const topicCount = Array.isArray(response?.topics) ? response.topics.length : 0;
@@ -511,7 +511,7 @@ class YarboOverviewCard extends HTMLElement {
       this._hiddenBreadcrumbEntries.clear();
       this._trailPreferenceInitialized.clear();
       stack.innerHTML =
-        '<div class="empty">No Yarbo devices have published a usable DeviceMSG yet.</div>';
+        '<div class="empty">No S2JYarbo devices have published a usable DeviceMSG yet.</div>';
       return;
     }
 
@@ -1402,7 +1402,7 @@ class YarboOverviewCard extends HTMLElement {
         <div class="shell">
           <div class="header">
             <div>
-              <h1 class="title">Yarbo Overview</h1>
+              <h1 class="title">S2JYarbo Overview</h1>
               <p class="subtitle">Live device health, RTK status, and current map position.</p>
             </div>
             <div class="status"></div>
@@ -1585,6 +1585,7 @@ class YarboOverviewCard extends HTMLElement {
     const location = this._entryLocation(entry);
     const plans = Array.isArray(entry.plans) ? entry.plans : [];
     const wifi = entry.wifi || null;
+    const lastNotification = entry.last_notification || null;
     const connectionState = entry.connection_state || "unknown";
     const errorCode = summary.error_code;
     const trackerEntityId = entry.tracker_entity_id;
@@ -1629,6 +1630,8 @@ class YarboOverviewCard extends HTMLElement {
       ["Position", this._position(summary.combined_odom_x, summary.combined_odom_y)],
       ["Coords", this._coords(location.latitude, location.longitude)],
       ["GPS", this._gpsQuality(location)],
+      ["Notifications", this._valueOrDash(entry.notification_count ?? 0)],
+      ["Last Notice", this._notificationSummary(lastNotification)],
       ["Head", this._valueOrDash(summary.head_serial)],
       ["Updated", this._dateTime(summary.updated_at)],
     ]
@@ -1919,7 +1922,7 @@ class YarboOverviewCard extends HTMLElement {
     this._render();
 
     try {
-      const response = await this._hass.callApi("POST", "yarbo/start_plan", {
+      const response = await this._hass.callApi("POST", "s2jyarbo/start_plan", {
         entry_id: entryId,
         plan_id: selectedPlanId,
       });
@@ -1959,7 +1962,7 @@ class YarboOverviewCard extends HTMLElement {
     this._render();
 
     try {
-      const response = await this._hass.callApi("POST", "yarbo/recharge", {
+      const response = await this._hass.callApi("POST", "s2jyarbo/recharge", {
         entry_id: entryId,
       });
       const topic = response?.topic || "command topic";
@@ -1993,7 +1996,7 @@ class YarboOverviewCard extends HTMLElement {
     this._render();
 
     try {
-      const response = await this._hass.callApi("POST", "yarbo/stop", {
+      const response = await this._hass.callApi("POST", "s2jyarbo/stop", {
         entry_id: entryId,
       });
       const topic = response?.topic || "command topic";
@@ -2033,7 +2036,7 @@ class YarboOverviewCard extends HTMLElement {
     this._render();
 
     try {
-      const response = await this._hass.callApi("POST", "yarbo/shutdown", {
+      const response = await this._hass.callApi("POST", "s2jyarbo/shutdown", {
         entry_id: entryId,
       });
       const topic = response?.topic || "command topic";
@@ -2073,7 +2076,7 @@ class YarboOverviewCard extends HTMLElement {
     this._render();
 
     try {
-      const response = await this._hass.callApi("POST", "yarbo/restart", {
+      const response = await this._hass.callApi("POST", "s2jyarbo/restart", {
         entry_id: entryId,
       });
       const topic = response?.topic || "command topic";
@@ -2107,7 +2110,7 @@ class YarboOverviewCard extends HTMLElement {
     this._render();
 
     try {
-      const response = await this._hass.callApi("POST", "yarbo/set_volume", {
+      const response = await this._hass.callApi("POST", "s2jyarbo/set_volume", {
         entry_id: entryId,
         percent,
       });
@@ -3905,6 +3908,21 @@ class YarboOverviewCard extends HTMLElement {
     return parts.length ? parts.join(" · ") : "—";
   }
 
+  _notificationSummary(notification) {
+    if (!notification || typeof notification !== "object") {
+      return null;
+    }
+
+    const title = typeof notification.title === "string" ? notification.title.trim() : "";
+    const message = typeof notification.message === "string" ? notification.message.trim() : "";
+    const combined = [title, message].filter(Boolean).join(": ");
+    if (!combined) {
+      return null;
+    }
+
+    return combined.length > 120 ? `${combined.slice(0, 117)}...` : combined;
+  }
+
   _dateTime(value) {
     if (!value) {
       return "—";
@@ -3932,16 +3950,16 @@ class YarboOverviewCard extends HTMLElement {
   }
 }
 
-if (!customElements.get("yarbo-overview-card")) {
-  customElements.define("yarbo-overview-card", YarboOverviewCard);
+if (!customElements.get("s2jyarbo-overview-card")) {
+  customElements.define("s2jyarbo-overview-card", YarboOverviewCard);
 }
 
 window.customCards = window.customCards || [];
-if (!window.customCards.some((card) => card.type === "yarbo-overview-card")) {
+if (!window.customCards.some((card) => card.type === "s2jyarbo-overview-card")) {
   window.customCards.push({
-    type: "yarbo-overview-card",
-    name: "Yarbo Overview",
-    description: "Overview widgets for every Yarbo device, including live map position.",
+    type: "s2jyarbo-overview-card",
+    name: "S2JYarbo Overview",
+    description: "Overview widgets for every configured S2JYarbo device, including live map position.",
     preview: true,
   });
 }

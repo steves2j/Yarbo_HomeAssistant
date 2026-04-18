@@ -1,4 +1,4 @@
-"""Sidebar panel and API views for Yarbo."""
+"""Sidebar panel and API views for S2JYarbo."""
 
 from __future__ import annotations
 
@@ -24,25 +24,25 @@ from .const import DOMAIN
 from .device_data import is_device_message_topic
 from .mqtt import YarboMqttClient
 
-PANEL_FRONTEND_PATH = "yarbo-topics"
-PANEL_STATIC_URL = "/yarbo_static"
-PANEL_API_URL = "/api/yarbo/topics"
-DASHBOARD_API_URL = "/api/yarbo/dashboard"
-REQUEST_DEVICE_MSG_API_URL = "/api/yarbo/request_device_msg"
-REQUEST_MAP_API_URL = "/api/yarbo/request_map"
-REFRESH_DEVICE_DATA_API_URL = "/api/yarbo/refresh_device_data"
-START_PLAN_API_URL = "/api/yarbo/start_plan"
-STOP_API_URL = "/api/yarbo/stop"
-SHUTDOWN_API_URL = "/api/yarbo/shutdown"
-RESTART_API_URL = "/api/yarbo/restart"
-SET_VOLUME_API_URL = "/api/yarbo/set_volume"
-RECHARGE_API_URL = "/api/yarbo/recharge"
-PANEL_MODULE_NAME = "yarbo-topics-panel"
-OVERVIEW_CARD_MODULE_NAME = "yarbo-overview-card"
+PANEL_FRONTEND_PATH = "s2jyarbo-topics"
+PANEL_STATIC_URL = "/s2jyarbo_static"
+PANEL_API_URL = "/api/s2jyarbo/topics"
+DASHBOARD_API_URL = "/api/s2jyarbo/dashboard"
+REQUEST_DEVICE_MSG_API_URL = "/api/s2jyarbo/request_device_msg"
+REQUEST_MAP_API_URL = "/api/s2jyarbo/request_map"
+REFRESH_DEVICE_DATA_API_URL = "/api/s2jyarbo/refresh_device_data"
+START_PLAN_API_URL = "/api/s2jyarbo/start_plan"
+STOP_API_URL = "/api/s2jyarbo/stop"
+SHUTDOWN_API_URL = "/api/s2jyarbo/shutdown"
+RESTART_API_URL = "/api/s2jyarbo/restart"
+SET_VOLUME_API_URL = "/api/s2jyarbo/set_volume"
+RECHARGE_API_URL = "/api/s2jyarbo/recharge"
+PANEL_MODULE_NAME = "s2jyarbo-topics-panel"
+OVERVIEW_CARD_MODULE_NAME = "s2jyarbo-overview-card"
 
 
 async def async_register_panel(hass: HomeAssistant) -> None:
-    """Register the Yarbo sidebar panel and supporting HTTP endpoints."""
+    """Register the S2JYarbo sidebar panel and supporting HTTP endpoints."""
     panel_dir = Path(__file__).parent / "panel"
     panel_module = panel_dir / f"{PANEL_MODULE_NAME}.js"
     overview_module = panel_dir / f"{OVERVIEW_CARD_MODULE_NAME}.js"
@@ -72,7 +72,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         frontend_url_path=PANEL_FRONTEND_PATH,
         webcomponent_name=PANEL_MODULE_NAME,
         module_url=f"{PANEL_STATIC_URL}/{PANEL_MODULE_NAME}.js?v={module_version}",
-        sidebar_title="Yarbo Topics",
+        sidebar_title="S2JYarbo Topics",
         sidebar_icon="mdi:format-list-bulleted-square",
         require_admin=True,
         config_panel_domain=DOMAIN,
@@ -83,7 +83,7 @@ class YarboTopicsView(HomeAssistantView):
     """Serve current Yarbo-discovered MQTT topics."""
 
     url = PANEL_API_URL
-    name = "api:yarbo:topics"
+    name = "api:s2jyarbo:topics"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -139,7 +139,7 @@ class YarboTopicsView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         if not await runtime.async_clear_topic_sample(topic):
             return web.Response(status=404, text="Topic sample not found")
@@ -151,7 +151,7 @@ class YarboDashboardView(HomeAssistantView):
     """Serve device-summary data for the Yarbo Overview card."""
 
     url = DASHBOARD_API_URL
-    name = "api:yarbo:dashboard"
+    name = "api:s2jyarbo:dashboard"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -164,6 +164,9 @@ class YarboDashboardView(HomeAssistantView):
         runtimes: dict[str, YarboMqttClient] = self._hass.data.get(DOMAIN, {})
 
         for entry in self._hass.config_entries.async_entries(DOMAIN):
+            if _is_entry_hidden_from_dashboard(self._hass, entry):
+                continue
+
             runtime = runtimes.get(entry.entry_id)
             entries.append(_serialize_dashboard_entry(self._hass, entry, runtime))
 
@@ -174,7 +177,7 @@ class YarboRequestDeviceMessageView(HomeAssistantView):
     """Handle widget actions for requesting a fresh DeviceMSG payload."""
 
     url = REQUEST_DEVICE_MSG_API_URL
-    name = "api:yarbo:request_device_msg"
+    name = "api:s2jyarbo:request_device_msg"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -200,7 +203,7 @@ class YarboRequestDeviceMessageView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
             topic = await runtime.async_request_device_message()
@@ -219,7 +222,7 @@ class YarboRequestMapView(HomeAssistantView):
     """Handle widget actions for requesting a fresh map payload."""
 
     url = REQUEST_MAP_API_URL
-    name = "api:yarbo:request_map"
+    name = "api:s2jyarbo:request_map"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -245,7 +248,7 @@ class YarboRequestMapView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
             topic = await runtime.async_request_map()
@@ -264,7 +267,7 @@ class YarboRefreshDeviceDataView(HomeAssistantView):
     """Handle widget actions for requesting a full refresh bundle."""
 
     url = REFRESH_DEVICE_DATA_API_URL
-    name = "api:yarbo:refresh_device_data"
+    name = "api:s2jyarbo:refresh_device_data"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -290,7 +293,7 @@ class YarboRefreshDeviceDataView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
             topics = await runtime.async_refresh_device_data()
@@ -309,7 +312,7 @@ class YarboStartPlanView(HomeAssistantView):
     """Handle widget actions for starting a plan."""
 
     url = START_PLAN_API_URL
-    name = "api:yarbo:start_plan"
+    name = "api:s2jyarbo:start_plan"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -338,7 +341,7 @@ class YarboStartPlanView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
             topic = await runtime.async_start_plan(plan_id)
@@ -360,7 +363,7 @@ class YarboRechargeView(HomeAssistantView):
     """Handle widget actions for sending a recharge command."""
 
     url = RECHARGE_API_URL
-    name = "api:yarbo:recharge"
+    name = "api:s2jyarbo:recharge"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -386,7 +389,7 @@ class YarboRechargeView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
             topic = await runtime.async_recharge()
@@ -405,7 +408,7 @@ class YarboStopView(HomeAssistantView):
     """Handle widget actions for sending a stop command."""
 
     url = STOP_API_URL
-    name = "api:yarbo:stop"
+    name = "api:s2jyarbo:stop"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -431,7 +434,7 @@ class YarboStopView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
             topic = await runtime.async_stop()
@@ -450,7 +453,7 @@ class YarboShutdownView(HomeAssistantView):
     """Handle widget actions for sending a shutdown command."""
 
     url = SHUTDOWN_API_URL
-    name = "api:yarbo:shutdown"
+    name = "api:s2jyarbo:shutdown"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -476,7 +479,7 @@ class YarboShutdownView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
             topic = await runtime.async_shutdown()
@@ -495,7 +498,7 @@ class YarboRestartView(HomeAssistantView):
     """Handle widget actions for sending a restart command."""
 
     url = RESTART_API_URL
-    name = "api:yarbo:restart"
+    name = "api:s2jyarbo:restart"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -521,7 +524,7 @@ class YarboRestartView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
             topic = await runtime.async_restart()
@@ -540,7 +543,7 @@ class YarboSetVolumeView(HomeAssistantView):
     """Handle widget actions for updating the sound volume."""
 
     url = SET_VOLUME_API_URL
-    name = "api:yarbo:set_volume"
+    name = "api:s2jyarbo:set_volume"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -569,7 +572,7 @@ class YarboSetVolumeView(HomeAssistantView):
         runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
 
         if entry is None or runtime is None:
-            return web.Response(status=404, text="Yarbo entry not found")
+            return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
             topic, volume = await runtime.async_set_volume(percent)
@@ -667,7 +670,23 @@ def _serialize_dashboard_entry(
         "plans": _extract_plan_options(state.topic_samples) if state else [],
         "site_map": _extract_site_map(state.topic_samples) if state else None,
         "wifi": _extract_wifi_details(state.topic_samples) if state else None,
+        "notification_count": state.notification_count if state else 0,
+        "last_notification": state.last_notification if state else None,
+        "recent_notifications": state.notification_history[-5:] if state else [],
     }
+
+
+def _is_entry_hidden_from_dashboard(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Return True when an entry should be hidden from the overview dashboard."""
+    if entry.disabled_by is not None:
+        return True
+
+    entity_registry = er.async_get(hass)
+    registry_entries = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
+    if not registry_entries:
+        return False
+
+    return all(registry_entry.disabled_by is not None for registry_entry in registry_entries)
 
 
 def _extract_plan_options(topic_samples: dict[str, dict[str, Any]]) -> list[dict[str, str]]:

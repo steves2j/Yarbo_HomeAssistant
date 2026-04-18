@@ -1,15 +1,15 @@
-"""Constants for the Yarbo integration."""
+"""Constants for the S2JYarbo integration."""
 
 from __future__ import annotations
 
 from homeassistant.const import CONF_HOST, CONF_PORT
 
-DOMAIN = "yarbo"
+DOMAIN = "s2jyarbo"
 
 CONF_SERIAL_NUMBER = "serial_number"
 CONF_TLS = "tls"
 
-DEFAULT_NAME = "Yarbo"
+DEFAULT_NAME = "S2JYarbo"
 DEFAULT_PORT = 1883
 DEFAULT_TLS_PORT = 8883
 DEFAULT_TOPIC_PREFIX = "snowbot"

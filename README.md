@@ -1,13 +1,13 @@
-# Yarbo Home Assistant
+# S2JYarbo Home Assistant
 
-Home Assistant custom integration workspace for Yarbo devices using MQTT.
+Home Assistant custom integration workspace for Yarbo devices using MQTT, published under the `s2jyarbo` domain to avoid conflicts with other Yarbo integrations.
 
 This repository contains:
 
-- the `yarbo` custom integration in `custom_components/yarbo`
+- the `s2jyarbo` custom integration in `custom_components/s2jyarbo`
 - a local Docker-based Home Assistant development instance
-- a custom Yarbo topics sidebar panel
-- a custom Yarbo overview card for the Home Assistant dashboard
+- a custom S2JYarbo topics sidebar panel
+- a custom S2JYarbo overview card for the Home Assistant dashboard
 
 The integration is currently MQTT-first. It subscribes to `snowbot/<serial>/#`, captures topic samples, builds device summaries from `device/DeviceMSG`, `device/heart_beat`, and `device/data_feedback`, and exposes those details through Home Assistant entities and custom UI.
 
@@ -26,7 +26,7 @@ See [CHANGELOG.md](CHANGELOG.md) for feature history.
   - Yarbo serial number
 - Local-push MQTT runtime with automatic reconnect
 - Subscription to all device topics under `snowbot/<serial>/#`
-- Topic discovery and sample capture in the `Yarbo Topics` sidebar panel
+- Topic discovery and sample capture in the `S2JYarbo Topics` sidebar panel
 - Pairing of `app/get_*` and `app/read_*` commands with `device/data_feedback`
 - Merged `device/DeviceMSG` document to capture fields that appear across multiple messages
 - Diagnostic sensor entities for MQTT/runtime state
@@ -51,7 +51,7 @@ See [CHANGELOG.md](CHANGELOG.md) for feature history.
 ├── .github/workflows/          # Validation workflows
 ├── .homeassistant/              # Local Home Assistant config directory
 ├── custom_components/
-│   └── yarbo/                   # Yarbo custom integration
+│   └── s2jyarbo/                # S2JYarbo custom integration
 ├── scripts/                     # Local workflow helpers
 ├── CHANGELOG.md                 # Project change log
 ├── LICENSE                      # Distribution license
@@ -72,14 +72,14 @@ Once this repository is published and available on GitHub, the recommended insta
 3. Add:
    - Repository: `https://github.com/steves2j/Yarbo_HomeAssistant`
    - Category: `Integration`
-4. Search for `Yarbo Home Assistant Integration`
+4. Search for `S2JYarbo Home Assistant Integration`
 5. Install it
 6. Restart Home Assistant
 7. Add the integration from `Settings -> Devices & Services`
 
 ### Manual install
 
-1. Copy `custom_components/yarbo` into your Home Assistant config directory under `custom_components/`
+1. Copy `custom_components/s2jyarbo` into your Home Assistant config directory under `custom_components/`
 2. Restart Home Assistant
 3. Add the integration from `Settings -> Devices & Services`
 
@@ -88,7 +88,7 @@ Example target path:
 ```text
 <config>/
 └── custom_components/
-    └── yarbo/
+    └── s2jyarbo/
 ```
 
 ## Quick start
@@ -103,14 +103,14 @@ Open `http://localhost:8123`.
 
 On first run, complete the Home Assistant onboarding flow.
 
-### 2. Add Yarbo
+### 2. Add S2JYarbo
 
 In Home Assistant:
 
 1. Open `Settings`
 2. Open `Devices & Services`
 3. Click `Add Integration`
-4. Search for `Yarbo Home Assistant Integration`
+4. Search for `S2JYarbo Home Assistant Integration`
 5. Enter:
    - broker host/IP
    - port
@@ -140,14 +140,14 @@ For a clean public release:
 
 1. Push the repository to GitHub
 2. Make sure the repository description, topics, and branding are set appropriately on GitHub
-3. Bump `custom_components/yarbo/manifest.json` `version`
+3. Bump `custom_components/s2jyarbo/manifest.json` `version`
 4. Update `CHANGELOG.md`
 5. Create a GitHub release/tag that matches the integration version
 6. Verify the GitHub Actions pass
 
 If the GitHub repository URL changes, update:
 
-- `custom_components/yarbo/manifest.json`
+- `custom_components/s2jyarbo/manifest.json`
 - this README
 
 ## Home Assistant UI
@@ -160,11 +160,11 @@ Each config entry creates:
 - `sensor.<name>_discovered_mqtt_topics`
 - `device_tracker.<name>_location`
 
-The integration can be reconfigured from the Yarbo card menu in `Settings -> Devices & Services`.
+The integration can be reconfigured from the S2JYarbo card menu in `Settings -> Devices & Services`.
 
-### Yarbo Topics sidebar
+### S2JYarbo Topics sidebar
 
-The custom admin-only sidebar panel is registered as `Yarbo Topics`.
+The custom admin-only sidebar panel is registered as `S2JYarbo Topics`.
 
 It shows:
 
@@ -174,14 +174,14 @@ It shows:
 - packet metadata
 - merged `DeviceMSG` document
 
-### Yarbo overview card
+### S2JYarbo overview card
 
-The custom card is auto-registered as `yarbo-overview-card`.
+The custom card is auto-registered as `s2jyarbo-overview-card`.
 
 Use it in Lovelace as:
 
 ```yaml
-type: custom:yarbo-overview-card
+type: custom:s2jyarbo-overview-card
 ```
 
 The card renders one widget per Yarbo config entry and includes:
@@ -212,10 +212,10 @@ Notes:
 
 ## Development notes
 
-- Code changes in `custom_components/yarbo` are mounted directly into the local Home Assistant container.
+- Code changes in `custom_components/s2jyarbo` are mounted directly into the local Home Assistant container.
 - Frontend changes usually require a hard browser refresh.
 - Backend changes usually require reloading the integration or restarting Home Assistant.
-- The custom panel/frontend bundle is served from `custom_components/yarbo/panel/`.
+- The custom panel/frontend bundle is served from `custom_components/s2jyarbo/panel/`.
 
 ## Known limitations
 
@@ -244,18 +244,18 @@ This section is intended as handoff context for a future coding agent continuing
 
 ### Current architecture
 
-- Backend entry setup lives in `custom_components/yarbo/__init__.py`
-- MQTT runtime and topic/sample persistence live in `custom_components/yarbo/mqtt.py`
-- MQTT topic helpers and constants live in `custom_components/yarbo/const.py`
-- Summary parsing from observed payloads lives in `custom_components/yarbo/device_data.py`
+- Backend entry setup lives in `custom_components/s2jyarbo/__init__.py`
+- MQTT runtime and topic/sample persistence live in `custom_components/s2jyarbo/mqtt.py`
+- MQTT topic helpers and constants live in `custom_components/s2jyarbo/const.py`
+- Summary parsing from observed payloads lives in `custom_components/s2jyarbo/device_data.py`
 - Home Assistant entities live in:
-  - `custom_components/yarbo/sensor.py`
-  - `custom_components/yarbo/device_tracker.py`
-- Config flow lives in `custom_components/yarbo/config_flow.py`
-- Custom HTTP/API views and panel registration live in `custom_components/yarbo/panel.py`
+  - `custom_components/s2jyarbo/sensor.py`
+  - `custom_components/s2jyarbo/device_tracker.py`
+- Config flow lives in `custom_components/s2jyarbo/config_flow.py`
+- Custom HTTP/API views and panel registration live in `custom_components/s2jyarbo/panel.py`
 - Frontend custom UI lives in:
-  - `custom_components/yarbo/panel/yarbo-topics-panel.js`
-  - `custom_components/yarbo/panel/yarbo-overview-card.js`
+  - `custom_components/s2jyarbo/panel/s2jyarbo-topics-panel.js`
+  - `custom_components/s2jyarbo/panel/s2jyarbo-overview-card.js`
 
 ### Protocol assumptions already encoded
 

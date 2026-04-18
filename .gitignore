@@ -23,6 +23,10 @@
 .homeassistant/tts/
 .homeassistant/www/community/
 
+
+# Local-only HACS install
+custom_components/hacs/
+
 # Python / tooling
 .venv/
 .pytest_cache/

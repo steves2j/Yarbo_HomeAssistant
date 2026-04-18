@@ -6,12 +6,14 @@ import json
 import logging
 import ssl
 import gzip
+import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Any
 import zlib
 
 import paho.mqtt.client as mqtt
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, callback
@@ -56,6 +58,13 @@ from .device_data import (
 _LOGGER = logging.getLogger(__name__)
 _KEEPALIVE = 60
 _STORAGE_VERSION = 1
+_NOTIFICATION_HISTORY_LIMIT = 25
+_LOW_BATTERY_THRESHOLD = 20
+_GENERIC_SUCCESS_FEEDBACK_MESSAGES = {
+    "device messages retrieved successfully.",
+    "mower area settings loaded successfully.",
+    "successfully connected to the physical controller.",
+}
 
 
 def _callback_api_version() -> mqtt.CallbackAPIVersion:
@@ -86,6 +95,9 @@ class YarboMqttState:
     device_message_merge_count: int = 0
     device_message_merge_first_received: str | None = None
     device_message_merge_last_received: str | None = None
+    notification_history: list[dict[str, Any]] = field(default_factory=list)
+    last_notification: dict[str, Any] | None = None
+    notification_count: int = 0
     last_discovered_topic: str | None = None
     last_payload: str | None = None
     last_topic: str | None = None
@@ -106,6 +118,7 @@ class YarboMqttClient:
         self._use_tls: bool = entry.data[CONF_TLS]
         self._serial_number: str = entry.data[CONF_SERIAL_NUMBER]
         self._dispatcher_signal = f"{DOMAIN}_{entry.entry_id}_mqtt_state"
+        self._notification_signal = f"{DOMAIN}_{entry.entry_id}_notification"
         self._client: mqtt.Client | None = None
         self._store = Store[dict[str, Any]](
             hass,
@@ -121,6 +134,11 @@ class YarboMqttClient:
     def dispatcher_signal(self) -> str:
         """Return the dispatcher signal for runtime updates."""
         return self._dispatcher_signal
+
+    @property
+    def notification_signal(self) -> str:
+        """Return the dispatcher signal for runtime notifications."""
+        return self._notification_signal
 
     async def async_start(self) -> None:
         """Start the MQTT client."""
@@ -162,6 +180,8 @@ class YarboMqttClient:
             device_message_merge_count=self.state.device_message_merge_count,
             device_message_merge_first_received=self.state.device_message_merge_first_received,
             device_message_merge_last_received=self.state.device_message_merge_last_received,
+            notification_history=self.state.notification_history,
+            notification_count=self.state.notification_count,
         )
         return True
 
@@ -180,6 +200,9 @@ class YarboMqttClient:
             "device_message_merge_count": 0,
             "device_message_merge_first_received": None,
             "device_message_merge_last_received": None,
+            "notification_history": [],
+            "last_notification": None,
+            "notification_count": 0,
         }
         self._apply_state_update(cleared_state)
         await self._async_save_store(
@@ -191,6 +214,8 @@ class YarboMqttClient:
             device_message_merge_count=0,
             device_message_merge_first_received=None,
             device_message_merge_last_received=None,
+            notification_history=[],
+            notification_count=0,
         )
 
     async def async_request_device_message(self) -> str:
@@ -240,6 +265,8 @@ class YarboMqttClient:
         device_message_merge_count: int,
         device_message_merge_first_received: str | None,
         device_message_merge_last_received: str | None,
+        notification_history: list[dict[str, Any]],
+        notification_count: int,
     ) -> None:
         """Persist the MQTT discovery cache for this entry."""
         payload: dict[str, Any] = {
@@ -258,6 +285,10 @@ class YarboMqttClient:
             payload["device_message_merge_first_received"] = device_message_merge_first_received
         if device_message_merge_last_received is not None:
             payload["device_message_merge_last_received"] = device_message_merge_last_received
+        if notification_history:
+            payload["notification_history"] = notification_history
+        if notification_count > 0:
+            payload["notification_count"] = notification_count
 
         await self._store.async_save(payload)
 
@@ -681,6 +712,12 @@ class YarboMqttClient:
         device_message_merge_count = int(stored.get("device_message_merge_count", 0) or 0)
         device_message_merge_first_received = stored.get("device_message_merge_first_received")
         device_message_merge_last_received = stored.get("device_message_merge_last_received")
+        notification_history = _normalize_notification_history(
+            stored.get("notification_history")
+        )
+        notification_count = int(
+            stored.get("notification_count", len(notification_history)) or 0
+        )
 
         if not topics and topic_samples:
             topics = list(topic_samples)
@@ -727,6 +764,11 @@ class YarboMqttClient:
             updates["device_message_merge_first_received"] = device_message_merge_first_received
         if device_message_merge_last_received is not None:
             updates["device_message_merge_last_received"] = device_message_merge_last_received
+        if notification_history:
+            updates["notification_history"] = notification_history
+            updates["last_notification"] = notification_history[-1]
+        if notification_count > 0:
+            updates["notification_count"] = notification_count
 
         if updates:
             self._apply_state_update(updates, notify=False)
@@ -743,6 +785,7 @@ class YarboMqttClient:
         discovered_topics = self.state.discovered_topics
         topic_samples = self.state.topic_samples
         pending_command_topics = list(self.state.pending_command_topics)
+        previous_summary = self.state.device_summary
         sample = _build_topic_sample(payload, received_at, packet_metadata)
         updates: dict[str, Any] = {
             "connection_state": STATE_CONNECTED,
@@ -754,6 +797,7 @@ class YarboMqttClient:
         }
         should_notify = False
         should_save = False
+        paired_command_topic: str | None = None
 
         if _is_command_request_topic(topic):
             pending_command_topics.append(topic)
@@ -862,6 +906,28 @@ class YarboMqttClient:
         should_save = True
         should_notify = True
 
+        current_summary = updates.get("device_summary", self.state.device_summary)
+        notifications = _extract_runtime_notifications(
+            topic=topic,
+            payload=payload,
+            received_at=received_at,
+            previous_summary=previous_summary,
+            current_summary=current_summary,
+            paired_command_topic=paired_command_topic,
+        )
+        if notifications:
+            notification_history = list(self.state.notification_history)
+            for notification in notifications:
+                notification_history = _append_notification_history(
+                    notification_history,
+                    notification,
+                )
+            updates["notification_history"] = notification_history
+            updates["last_notification"] = notification_history[-1]
+            updates["notification_count"] = self.state.notification_count + len(notifications)
+            should_save = True
+            should_notify = True
+
         if should_save:
             stored_topics = updates.get("discovered_topics", discovered_topics)
             stored_samples = updates.get("topic_samples", topic_samples)
@@ -893,10 +959,20 @@ class YarboMqttClient:
                         "device_message_merge_last_received",
                         self.state.device_message_merge_last_received,
                     ),
+                    notification_history=updates.get(
+                        "notification_history",
+                        self.state.notification_history,
+                    ),
+                    notification_count=updates.get(
+                        "notification_count",
+                        self.state.notification_count,
+                    ),
                 )
             )
 
         self._apply_state_update(updates, notify=should_notify)
+        for notification in notifications:
+            self._emit_runtime_notification(notification)
 
     def _update_state(self, **changes: Any) -> None:
         """Update state and notify Home Assistant."""
@@ -910,6 +986,22 @@ class YarboMqttClient:
 
         if notify:
             async_dispatcher_send(self._hass, self._dispatcher_signal)
+
+    @callback
+    def _emit_runtime_notification(self, notification: dict[str, Any]) -> None:
+        """Emit a runtime notification into Home Assistant surfaces."""
+        async_dispatcher_send(self._hass, self._notification_signal, notification)
+        self._hass.bus.async_fire(f"{DOMAIN}_notification", notification)
+
+        if notification.get("level") not in {"warning", "error"}:
+            return
+
+        persistent_notification.async_create(
+            self._hass,
+            _render_persistent_notification_message(notification),
+            title=notification.get("title") or "Yarbo notification",
+            notification_id=f"{DOMAIN}_{self._entry.entry_id}_notification",
+        )
 
 
 def _build_topic_sample(
@@ -1182,6 +1274,346 @@ def _remove_first_pending_command(
         return pending_command_topics[1:]
 
     return updated_topics
+
+
+def _normalize_notification_history(value: Any) -> list[dict[str, Any]]:
+    """Normalize stored notification history into a bounded list of dicts."""
+    if not isinstance(value, list):
+        return []
+
+    history = [item for item in value if isinstance(item, dict)]
+    return history[-_NOTIFICATION_HISTORY_LIMIT:]
+
+
+def _extract_runtime_notifications(
+    *,
+    topic: str,
+    payload: bytes,
+    received_at: str,
+    previous_summary: dict[str, Any] | None,
+    current_summary: dict[str, Any] | None,
+    paired_command_topic: str | None,
+) -> list[dict[str, Any]]:
+    """Extract runtime notifications from command feedback and state changes."""
+    notifications: list[dict[str, Any]] = []
+
+    if is_data_feedback_topic(topic):
+        notifications.extend(
+            _extract_data_feedback_notifications(
+                payload=payload,
+                received_at=received_at,
+                paired_command_topic=paired_command_topic,
+                source_topic=topic,
+            )
+        )
+
+    notifications.extend(
+        _extract_summary_transition_notifications(
+            received_at=received_at,
+            previous_summary=previous_summary,
+            current_summary=current_summary,
+            source_topic=topic,
+        )
+    )
+    return notifications
+
+
+def _extract_data_feedback_notifications(
+    *,
+    payload: bytes,
+    received_at: str,
+    paired_command_topic: str | None,
+    source_topic: str,
+) -> list[dict[str, Any]]:
+    """Extract command-level notifications from device/data_feedback."""
+    payload_body = _extract_text_payload(payload)
+    if payload_body is None:
+        return []
+
+    try:
+        decoded = json.loads(payload_body)
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(decoded, dict):
+        return []
+
+    state = _int_or_none(decoded.get("state"))
+    message = _string_or_none(decoded.get("msg"))
+    declared_topic = _string_or_none(decoded.get("topic"))
+    command_topic = paired_command_topic
+    if command_topic is None and declared_topic is not None:
+        command_topic = declared_topic
+
+    command_label = _humanize_command_topic(command_topic)
+    notifications: list[dict[str, Any]] = []
+
+    if state is not None and state != 0:
+        notifications.append(
+            _build_runtime_notification(
+                event_type="command_failed",
+                level="error",
+                title=f"{command_label} failed",
+                message=message
+                or f"{command_label} returned state {state}.",
+                received_at=received_at,
+                source_topic=source_topic,
+                command_topic=command_topic,
+                code=state,
+            )
+        )
+        return notifications
+
+    if message and not _is_generic_feedback_message(message):
+        notifications.append(
+            _build_runtime_notification(
+                event_type="command_notice",
+                level="info",
+                title=command_label,
+                message=message,
+                received_at=received_at,
+                source_topic=source_topic,
+                command_topic=command_topic,
+            )
+        )
+
+    return notifications
+
+
+def _extract_summary_transition_notifications(
+    *,
+    received_at: str,
+    previous_summary: dict[str, Any] | None,
+    current_summary: dict[str, Any] | None,
+    source_topic: str,
+) -> list[dict[str, Any]]:
+    """Extract notifications from device-summary transitions."""
+    if current_summary is None:
+        return []
+
+    previous_summary = previous_summary or {}
+    notifications: list[dict[str, Any]] = []
+
+    previous_error = _int_or_none(previous_summary.get("error_code")) or 0
+    current_error = _int_or_none(current_summary.get("error_code")) or 0
+    if current_error != 0 and current_error != previous_error:
+        notifications.append(
+            _build_runtime_notification(
+                event_type="device_error",
+                level="error",
+                title="Device error",
+                message=f"The device reported error code {current_error}.",
+                received_at=received_at,
+                source_topic=source_topic,
+                code=current_error,
+            )
+        )
+
+    previous_abnormal = _int_or_none(previous_summary.get("abnormal_error_code")) or 0
+    current_abnormal = _int_or_none(current_summary.get("abnormal_error_code")) or 0
+    if current_abnormal != 0 and current_abnormal != previous_abnormal:
+        notifications.append(
+            _build_runtime_notification(
+                event_type="device_error",
+                level="error",
+                title="Abnormal condition",
+                message=f"The device reported abnormal error code {current_abnormal}.",
+                received_at=received_at,
+                source_topic=source_topic,
+                code=current_abnormal,
+            )
+        )
+
+    previous_recharge_error = (
+        _int_or_none(previous_summary.get("wireless_recharge_error_code")) or 0
+    )
+    current_recharge_error = (
+        _int_or_none(current_summary.get("wireless_recharge_error_code")) or 0
+    )
+    if current_recharge_error != 0 and current_recharge_error != previous_recharge_error:
+        notifications.append(
+            _build_runtime_notification(
+                event_type="device_error",
+                level="error",
+                title="Recharge error",
+                message=(
+                    "The device reported wireless recharge error code "
+                    f"{current_recharge_error}."
+                ),
+                received_at=received_at,
+                source_topic=source_topic,
+                code=current_recharge_error,
+            )
+        )
+
+    previous_battery = _int_or_none(previous_summary.get("battery_level"))
+    current_battery = _int_or_none(current_summary.get("battery_level"))
+    charging_status = _int_or_none(current_summary.get("charging_status")) or 0
+    if (
+        current_battery is not None
+        and current_battery < _LOW_BATTERY_THRESHOLD
+        and charging_status == 0
+        and (previous_battery is None or previous_battery >= _LOW_BATTERY_THRESHOLD)
+    ):
+        notifications.append(
+            _build_runtime_notification(
+                event_type="low_battery",
+                level="warning",
+                title="Low battery",
+                message=f"Battery level dropped to {current_battery}%.",
+                received_at=received_at,
+                source_topic=source_topic,
+            )
+        )
+
+    previous_controller = _int_or_none(previous_summary.get("machine_controller"))
+    current_controller = _int_or_none(current_summary.get("machine_controller"))
+    if previous_controller not in (None, 0) and current_controller == 0:
+        notifications.append(
+            _build_runtime_notification(
+                event_type="device_notice",
+                level="warning",
+                title="Controller disconnected",
+                message="The device reported that the physical controller is disconnected.",
+                received_at=received_at,
+                source_topic=source_topic,
+            )
+        )
+
+    for key, title in (
+        ("plan_msg", "Plan update"),
+        ("schedule_msg", "Schedule update"),
+    ):
+        previous_message = _string_or_none(previous_summary.get(key))
+        current_message = _string_or_none(current_summary.get(key))
+        if current_message and current_message != previous_message:
+            notifications.append(
+                _build_runtime_notification(
+                    event_type="device_notice",
+                    level="info",
+                    title=title,
+                    message=current_message,
+                    received_at=received_at,
+                    source_topic=source_topic,
+                )
+            )
+
+    return notifications
+
+
+def _append_notification_history(
+    history: list[dict[str, Any]],
+    notification: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Append a notification to bounded history, collapsing consecutive duplicates."""
+    updated_history = list(history)
+    if updated_history and updated_history[-1].get("id") == notification.get("id"):
+        updated_history[-1] = notification
+        return updated_history
+
+    updated_history.append(notification)
+    return updated_history[-_NOTIFICATION_HISTORY_LIMIT:]
+
+
+def _build_runtime_notification(
+    *,
+    event_type: str,
+    level: str,
+    title: str,
+    message: str,
+    received_at: str,
+    source_topic: str,
+    command_topic: str | None = None,
+    code: int | None = None,
+) -> dict[str, Any]:
+    """Build a normalized runtime notification payload."""
+    identity_parts = [
+        event_type,
+        level,
+        title.strip(),
+        message.strip(),
+        source_topic.strip(),
+        (command_topic or "").strip(),
+        str(code) if code is not None else "",
+    ]
+    identity = "|".join(identity_parts)
+    notification_id = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
+    return {
+        "id": notification_id,
+        "event_type": event_type,
+        "level": level,
+        "title": title.strip(),
+        "message": message.strip(),
+        "received_at": received_at,
+        "source_topic": source_topic,
+        "command_topic": command_topic,
+        "code": code,
+    }
+
+
+def _render_persistent_notification_message(notification: dict[str, Any]) -> str:
+    """Render a runtime notification as a persistent-notification message."""
+    lines = [notification.get("message") or "Yarbo reported a notification."]
+
+    command_topic = notification.get("command_topic")
+    if isinstance(command_topic, str) and command_topic:
+        lines.append(f"Command: `{command_topic}`")
+
+    source_topic = notification.get("source_topic")
+    if isinstance(source_topic, str) and source_topic:
+        lines.append(f"Source: `{source_topic}`")
+
+    code = notification.get("code")
+    if code is not None:
+        lines.append(f"Code: `{code}`")
+
+    received_at = notification.get("received_at")
+    if isinstance(received_at, str) and received_at:
+        lines.append(f"Received: `{received_at}`")
+
+    return "\n\n".join(lines)
+
+
+def _humanize_command_topic(command_topic: str | None) -> str:
+    """Return a readable label for a Yarbo app command topic."""
+    if not command_topic:
+        return "Command"
+
+    leaf = command_topic.strip().rstrip("/").rsplit("/", 1)[-1]
+    if not leaf:
+        return "Command"
+
+    humanized = leaf.replace("_", " ").strip()
+    return humanized[:1].upper() + humanized[1:]
+
+
+def _is_generic_feedback_message(message: str) -> bool:
+    """Return True when a feedback message is informational noise."""
+    normalized = message.strip().lower()
+    if not normalized:
+        return True
+
+    return normalized in _GENERIC_SUCCESS_FEEDBACK_MESSAGES
+
+
+def _string_or_none(value: Any) -> str | None:
+    """Return a stripped string when value is a non-empty string."""
+    if not isinstance(value, str):
+        return None
+
+    stripped = value.strip()
+    return stripped or None
+
+
+def _int_or_none(value: Any) -> int | None:
+    """Return an int when the value is int-like."""
+    if isinstance(value, bool):
+        return int(value)
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_message_metadata(message: mqtt.MQTTMessage) -> dict[str, Any]:

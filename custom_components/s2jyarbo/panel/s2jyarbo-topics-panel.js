@@ -48,7 +48,7 @@ class YarboTopicsPanel extends HTMLElement {
     }
 
     try {
-      this._entries = await this._hass.callApi("GET", "yarbo/topics");
+      this._entries = await this._hass.callApi("GET", "s2jyarbo/topics");
       this._error = "";
     } catch (err) {
       this._error = err instanceof Error ? err.message : String(err);
@@ -63,7 +63,7 @@ class YarboTopicsPanel extends HTMLElement {
 
     const content = this._entries.length
       ? this._entries.map((entry) => this._renderEntry(entry)).join("")
-      : `<div class="empty">No Yarbo topics discovered yet.</div>`;
+      : `<div class="empty">No S2JYarbo topics discovered yet.</div>`;
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -360,8 +360,8 @@ class YarboTopicsPanel extends HTMLElement {
       <div class="page">
         <div class="header">
           <div class="title-wrap">
-            <h1>Yarbo MQTT Topics</h1>
-            <p>Live-discovered MQTT topics for each configured Yarbo entry.</p>
+            <h1>S2JYarbo MQTT Topics</h1>
+            <p>Live-discovered MQTT topics for each configured S2JYarbo entry.</p>
           </div>
           <div class="toolbar">
             <div class="status">${this._loading ? "Loading..." : "Auto-refresh every 1s"}</div>
@@ -628,7 +628,7 @@ class YarboTopicsPanel extends HTMLElement {
     this._render();
 
     try {
-      const updatedEntry = await this._hass.callApi("POST", "yarbo/topics", {
+      const updatedEntry = await this._hass.callApi("POST", "s2jyarbo/topics", {
         entry_id: entryId,
         topic,
       });
@@ -654,7 +654,7 @@ class YarboTopicsPanel extends HTMLElement {
     this._render();
 
     try {
-      this._entries = await this._hass.callApi("POST", "yarbo/topics", {
+      this._entries = await this._hass.callApi("POST", "s2jyarbo/topics", {
         action: "clear_all",
       });
       this._busyTopics.clear();
@@ -677,6 +677,6 @@ class YarboTopicsPanel extends HTMLElement {
   }
 }
 
-if (!customElements.get("yarbo-topics-panel")) {
-  customElements.define("yarbo-topics-panel", YarboTopicsPanel);
+if (!customElements.get("s2jyarbo-topics-panel")) {
+  customElements.define("s2jyarbo-topics-panel", YarboTopicsPanel);
 }

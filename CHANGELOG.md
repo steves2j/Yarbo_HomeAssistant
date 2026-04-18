@@ -19,7 +19,7 @@ The format loosely follows Keep a Changelog and uses semantic versioning where p
 - MQTT runtime using `paho-mqtt`
 - Subscription to `snowbot/<serial>/#`
 - MQTT reconnect handling and persistent topic/sample storage
-- Topic discovery and sample viewing in the `Yarbo Topics` sidebar panel
+- Topic discovery and sample viewing in the `S2JYarbo Topics` sidebar panel
 - Expandable topic samples with support for:
   - JSON
   - text
@@ -63,7 +63,7 @@ The format loosely follows Keep a Changelog and uses semantic versioning where p
 
 ### Changed
 
-- Distribution-facing name updated to `Yarbo Home Assistant Integration`
+- Distribution-facing name updated to `S2JYarbo Home Assistant Integration`
 - README updated from scaffold-level setup notes to current integration behavior and UI usage
 - Button styling updated to use MDI icons and compact icon-only controls where appropriate
 - Shutdown and restart actions now require an explicit enable step before use
