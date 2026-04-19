@@ -18,6 +18,7 @@ from homeassistant.components.http import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
@@ -162,8 +163,17 @@ class YarboDashboardView(HomeAssistantView):
         """Return one dashboard card entry per Yarbo config entry."""
         entries: list[dict[str, Any]] = []
         runtimes: dict[str, YarboMqttClient] = self._hass.data.get(DOMAIN, {})
+        requested_entry_ids = _resolve_dashboard_entry_ids(
+            self._hass,
+            entry_id=request.query.get("entry_id"),
+            entity_id=request.query.get("entity_id"),
+            device_id=request.query.get("device_id"),
+        )
 
         for entry in self._hass.config_entries.async_entries(DOMAIN):
+            if requested_entry_ids is not None and entry.entry_id not in requested_entry_ids:
+                continue
+
             if _is_entry_hidden_from_dashboard(self._hass, entry):
                 continue
 
@@ -687,6 +697,32 @@ def _is_entry_hidden_from_dashboard(hass: HomeAssistant, entry: ConfigEntry) -> 
         return False
 
     return all(registry_entry.disabled_by is not None for registry_entry in registry_entries)
+
+
+def _resolve_dashboard_entry_ids(
+    hass: HomeAssistant,
+    *,
+    entry_id: str | None,
+    entity_id: str | None,
+    device_id: str | None,
+) -> set[str] | None:
+    """Resolve dashboard selectors to one or more config entry ids."""
+    requested_ids: set[str] = set()
+
+    if entry_id:
+        requested_ids.add(entry_id)
+
+    if entity_id:
+        entity_entry = er.async_get(hass).async_get(entity_id)
+        if entity_entry and entity_entry.config_entry_id:
+            requested_ids.add(entity_entry.config_entry_id)
+
+    if device_id:
+        device_entry = dr.async_get(hass).async_get(device_id)
+        if device_entry:
+            requested_ids.update(device_entry.config_entries)
+
+    return requested_ids or None
 
 
 def _extract_plan_options(topic_samples: dict[str, dict[str, Any]]) -> list[dict[str, str]]:

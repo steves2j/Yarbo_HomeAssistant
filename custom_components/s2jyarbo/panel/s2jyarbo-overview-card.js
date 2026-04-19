@@ -108,10 +108,17 @@ class YarboOverviewCard extends HTMLElement {
   }
 
   getCardSize() {
-    return Math.max(4, this._entries.length * 6);
+    return 7;
   }
 
-  static getStubConfig() {
+  static getStubConfig(...args) {
+    for (const arg of args) {
+      const config = YarboOverviewCard._extractStubConfigFromArg(arg);
+      if (config) {
+        return config;
+      }
+    }
+
     return {};
   }
 
@@ -135,7 +142,26 @@ class YarboOverviewCard extends HTMLElement {
     this._loadingDashboard = true;
 
     try {
-      this._entries = await this._hass.callApi("GET", "s2jyarbo/dashboard");
+      const entries = await this._hass.callApi("GET", this._dashboardApiPath());
+      const hasSelector =
+        Boolean(this._config?.entry_id) ||
+        Boolean(this._config?.entity_id) ||
+        Boolean(this._config?.device_id);
+      if (!hasSelector && entries.length > 1) {
+        this._entries = [];
+        this._error =
+          "This card now shows one device per card. Add it from the device page or configure entry_id, entity_id, or device_id.";
+        return;
+      }
+
+      if (hasSelector && entries.length === 0) {
+        this._entries = [];
+        this._error =
+          "No S2JYarbo device matched this card configuration. Re-add the card from the device page or update its selector.";
+        return;
+      }
+
+      this._entries = entries;
       for (const entry of this._entries) {
         if (!this._trailPreferenceInitialized.has(entry.entry_id)) {
           this._hiddenBreadcrumbEntries.add(entry.entry_id);
@@ -159,6 +185,66 @@ class YarboOverviewCard extends HTMLElement {
         this._scheduleDashboardReload(250);
       }
     }
+  }
+
+  _dashboardApiPath() {
+    const params = new URLSearchParams();
+
+    if (this._config?.entry_id) {
+      params.set("entry_id", this._config.entry_id);
+    } else if (this._config?.entity_id) {
+      params.set("entity_id", this._config.entity_id);
+    } else if (this._config?.device_id) {
+      params.set("device_id", this._config.device_id);
+    }
+
+    const query = params.toString();
+    return query ? `s2jyarbo/dashboard?${query}` : "s2jyarbo/dashboard";
+  }
+
+  static _extractStubConfigFromArg(arg) {
+    if (!arg) {
+      return null;
+    }
+
+    if (Array.isArray(arg)) {
+      for (const item of arg) {
+        const config = YarboOverviewCard._extractStubConfigFromArg(item);
+        if (config) {
+          return config;
+        }
+      }
+      return null;
+    }
+
+    if (typeof arg === "string") {
+      if (arg.includes(".")) {
+        return { entity_id: arg };
+      }
+      return { device_id: arg };
+    }
+
+    if (typeof arg !== "object") {
+      return null;
+    }
+
+    if (typeof arg.entity_id === "string" && arg.entity_id) {
+      return { entity_id: arg.entity_id };
+    }
+
+    if (typeof arg.device_id === "string" && arg.device_id) {
+      return { device_id: arg.device_id };
+    }
+
+    if (typeof arg.entry_id === "string" && arg.entry_id) {
+      return { entry_id: arg.entry_id };
+    }
+
+    if (typeof arg.id === "string" && arg.id) {
+      return arg.id.includes(".") ? { entity_id: arg.id } : { device_id: arg.id };
+    }
+
+    return null;
   }
 
   _handleHassUpdate() {

@@ -178,13 +178,18 @@ It shows:
 
 The custom card is auto-registered as `s2jyarbo-overview-card`.
 
+Recommended:
+- add it from the device page using `Add to Dashboard`, then pick `S2JYarbo Overview`
+- this creates one card per device
+
 Use it in Lovelace as:
 
 ```yaml
 type: custom:s2jyarbo-overview-card
+entity_id: sensor.brutus_mqtt_connection
 ```
 
-The card renders one widget per Yarbo config entry and includes:
+The card renders one widget for the selected S2JYarbo device and includes:
 
 - connection state
 - satellite count
