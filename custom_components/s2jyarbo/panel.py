@@ -40,6 +40,7 @@ SET_VOLUME_API_URL = "/api/s2jyarbo/set_volume"
 RECHARGE_API_URL = "/api/s2jyarbo/recharge"
 PANEL_MODULE_NAME = "s2jyarbo-topics-panel"
 OVERVIEW_CARD_MODULE_NAME = "s2jyarbo-overview-card"
+MAP_CARD_MODULE_NAME = "s2jyarbo-map-card"
 
 
 async def async_register_panel(hass: HomeAssistant) -> None:
@@ -47,8 +48,10 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     panel_dir = Path(__file__).parent / "panel"
     panel_module = panel_dir / f"{PANEL_MODULE_NAME}.js"
     overview_module = panel_dir / f"{OVERVIEW_CARD_MODULE_NAME}.js"
-    module_version = int(panel_module.stat().st_mtime)
-    overview_module_version = int(overview_module.stat().st_mtime)
+    map_module = panel_dir / f"{MAP_CARD_MODULE_NAME}.js"
+    module_version = panel_module.stat().st_mtime_ns
+    overview_module_version = overview_module.stat().st_mtime_ns
+    map_module_version = map_module.stat().st_mtime_ns
     await hass.http.async_register_static_paths(
         [StaticPathConfig(PANEL_STATIC_URL, str(panel_dir), cache_headers=False)]
     )
@@ -63,6 +66,10 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     hass.http.register_view(YarboRestartView(hass))
     hass.http.register_view(YarboSetVolumeView(hass))
     hass.http.register_view(YarboRechargeView(hass))
+    frontend.add_extra_js_url(
+        hass,
+        f"{PANEL_STATIC_URL}/{MAP_CARD_MODULE_NAME}.js?v={map_module_version}",
+    )
     frontend.add_extra_js_url(
         hass,
         f"{PANEL_STATIC_URL}/{OVERVIEW_CARD_MODULE_NAME}.js?v={overview_module_version}",
@@ -957,6 +964,7 @@ def _extract_charging_points(candidates: Any) -> list[dict[str, Any]]:
                 "name": candidate.get("name") or "",
                 "point": point,
                 "start_point": _extract_xy_point(candidate.get("startPoint")),
+                "straight_phi": _coerce_float(candidate.get("straightPhi")),
             }
         )
 

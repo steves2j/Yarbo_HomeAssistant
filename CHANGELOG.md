@@ -6,6 +6,15 @@ This project is still in early development, so the current history is mostly fea
 
 The format loosely follows Keep a Changelog and uses semantic versioning where practical.
 
+## [0.2.0] - 2026-4-22
+
+### Changed
+
+- The overview card now uses the custom local-map widget directly instead of the previous native HA/OpenStreetMap-based map path
+- The integrated map now renders decoded `get_map` geometry, dock geometry, live heading, zoom/pan controls, follow mode, and breadcrumb trails inside the main overview card
+- Mower-head telemetry is now used to vary trail width between a thin travel line and the full 550 mm cutting width
+- Dock-based GPS calibration can now be learned and reused by the integrated map widget
+
 ## [0.1.0] - 2026-04-16
 
 ### Added

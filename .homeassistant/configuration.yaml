@@ -3,10 +3,6 @@ default_config:
 recorder:
   db_url: sqlite:////tmp/home-assistant_v2.db
   purge_keep_days: 3
-  exclude:
-    entity_globs:
-      - sensor.s2jyarbo_*
-      - sensor.yarbo_*
 
 logger:
   default: warning

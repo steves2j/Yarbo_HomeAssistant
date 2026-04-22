@@ -103,6 +103,7 @@ def parse_device_message_payload(
     rtk = _as_dict(payload.get("RTKMSG"))
     running = _as_dict(payload.get("RunningStatusMSG"))
     combined_odom = _as_dict(payload.get("CombinedOdom"))
+    wheel_speed = _as_dict(payload.get("WheelSpeedMSG"))
     rtk_base_data = _as_dict(payload.get("rtk_base_data"))
     rover = _as_dict(rtk_base_data.get("rover"))
     head = _as_dict(payload.get("HeadMsg"))
@@ -114,6 +115,8 @@ def parse_device_message_payload(
     body = _as_dict(payload.get("BodyMsg"))
     wireless_recharge = _as_dict(payload.get("wireless_recharge"))
     abnormal = _as_dict(payload.get("abnormal_msg"))
+    mower_head_info03 = _as_dict(payload.get("mower_head_info03"))
+    mower_head_info04 = _as_dict(payload.get("mower_head_info04"))
 
     location = _parse_gga_sentence(_as_str(rover.get("gngga")))
     fix_quality = _as_int(location.get("fix_quality")) if location else None
@@ -169,6 +172,14 @@ def parse_device_message_payload(
         "combined_odom_y": _as_float(combined_odom.get("y")),
         "combined_odom_heading": _as_float(combined_odom.get("phi")),
         "combined_odom_confidence": _as_float(payload.get("combined_odom_confidence")),
+        "left_wheel_speed": _as_float(wheel_speed.get("left")),
+        "right_wheel_speed": _as_float(wheel_speed.get("right")),
+        "left_wheel_distance": _as_float(wheel_speed.get("dist_left")),
+        "right_wheel_distance": _as_float(wheel_speed.get("dist_right")),
+        "left_blade_motor_speed": _as_float(mower_head_info03.get("left_blade_motor_speed")),
+        "right_blade_motor_speed": _as_float(mower_head_info04.get("right_blade_motor_speed")),
+        "left_blade_motor_rpm": _as_float(mower_head_info03.get("left_blade_motor_rpm")),
+        "right_blade_motor_rpm": _as_float(mower_head_info04.get("right_blade_motor_rpm")),
         "location": location,
         "summary_source": "device_msg",
         "updated_at": _format_timestamp(payload.get("timestamp")) or received_at,

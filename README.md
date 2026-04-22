@@ -32,7 +32,14 @@ See [CHANGELOG.md](CHANGELOG.md) for feature history.
 - Diagnostic sensor entities for MQTT/runtime state
 - Device tracker entity from GPS / RTK data
 - Overview dashboard card with one widget per configured Yarbo device
-- Native HA map with live marker and decoded `get_map` overlay support
+- Integrated local map widget inside the overview card with:
+  - decoded `get_map` geometry rendering
+  - live Yarbo footprint and heading
+  - dock geometry rendering
+  - follow mode, zoom, pan, and breadcrumb trail controls
+  - in-map GPS/heading overlay and calibration warning overlay
+  - variable trail width based on mower motor state
+  - magenta reverse trail segments
 - Plan dropdown populated from `read_all_plan`
 - Device commands from the overview card:
   - start plan
@@ -182,6 +189,20 @@ Recommended:
 - add it from the device page using `Add to Dashboard`, then pick `S2JYarbo Overview`
 - this creates one card per device
 
+If you are using Home Assistant `2026.4` or newer, be aware that new installs use the new auto-generated Home/Overview dashboard by default. That view only exposes `Add entity` and does not behave like a normal Lovelace dashboard for custom cards.
+
+In that case, the working path is:
+
+1. Open `Settings -> Dashboards`
+2. Click `Add dashboard`
+3. Create a new dashboard
+4. Open that dashboard
+5. Click `Edit dashboard`
+6. Click `Add card`
+7. Add `custom:s2jyarbo-overview-card`
+
+If you prefer, you can also create a dashboard from the `Overview (legacy)` template and add the card there.
+
 Use it in Lovelace as:
 
 ```yaml
@@ -194,7 +215,11 @@ The card renders one widget for the selected S2JYarbo device and includes:
 - connection state
 - satellite count
 - battery and recharge action
-- live map
+- integrated local map with decoded site geometry, follow mode, zoom, and breadcrumbs
+  - GPS coordinates and heading shown in-map
+  - calibration warning shown in-map when calibration is missing
+  - trail width changes between transit and 550 mm cutting width based on mower motor state
+  - magenta trail segments indicate reverse movement
 - plan selection
 - start / stop controls
 - advanced controls for shutdown, restart, volume, and Wi-Fi details
@@ -261,6 +286,7 @@ This section is intended as handoff context for a future coding agent continuing
 - Frontend custom UI lives in:
   - `custom_components/s2jyarbo/panel/s2jyarbo-topics-panel.js`
   - `custom_components/s2jyarbo/panel/s2jyarbo-overview-card.js`
+  - `custom_components/s2jyarbo/panel/s2jyarbo-map-card.js`
 
 ### Protocol assumptions already encoded
 
@@ -281,9 +307,19 @@ This section is intended as handoff context for a future coding agent continuing
 - The overview card uses a mix of:
   - dashboard API responses
   - live HA entity state
+  - an embedded local-map widget fed from the same dashboard entry data
   - cached command response data
+- The old native HA/OpenStreetMap path is no longer the active map inside the overview card; the overview now mounts the embedded local-map widget from `s2jyarbo-map-card.js`
+- `s2jyarbo-map-card.js` is now an internal widget module used by the overview card, not a user-facing standalone custom card registration
+- The map widget persists per-device zoom scale and dock-derived GPS calibration in browser storage
+- Trail rendering semantics are:
+  - `2px` width for transit / mower off
+  - `0.55m` width for cutting / mower on
+  - magenta segments indicate reverse travel
+- The mower-head state is inferred from `mower_head_info03/04` blade speed and RPM values parsed into the summary/status entity
 - Frontend changes usually require a hard refresh because Home Assistant caches panel/card JS aggressively
 - Some features intentionally rely on cached command payloads so they can mirror what the mobile app has already been seen sending
+- Home Assistant `2026.4.x` frontend caching can make JS edits look ignored if cache-busting is too coarse; `panel.py` now uses `st_mtime_ns` for extra JS URLs and that should be preserved
 
 ### Known problem areas
 
@@ -291,6 +327,8 @@ This section is intended as handoff context for a future coding agent continuing
 - Topic and response payloads are still being reverse-engineered from observed traffic
 - Large topic samples can trigger recorder attribute-size warnings in Home Assistant
 - The overview card has a lot of UI state and behavior in a single file; future work may benefit from splitting it into smaller helpers
+- The embedded widget path has its own `shadowRoot`; if map CSS appears to be ignored inside the overview card, verify the embedded path is loading the full shared stylesheet, not a minimal stub
+- Overlay positioning on the map is sensitive to both SVG letterboxing and internal drawing padding; if map labels drift into the black border again, inspect `_updateCanvasInsets()` first
 
 ### Safe next-step priorities
 
@@ -299,11 +337,13 @@ This section is intended as handoff context for a future coding agent continuing
 - Add tests around payload parsing and command/response pairing
 - Consider a bounded per-topic history instead of only latest-sample storage when protocol discovery is the goal
 - Reduce frontend complexity by factoring repeated control/button/map logic into smaller methods or modules
+- Add tests or debug instrumentation around the embedded map widget lifecycle, especially `entryData` ingestion and cached frontend module updates
 
 ### Working rules for a future agent
 
 - Do not assume the current MQTT payload shapes are complete or stable
 - Prefer reusing cached command samples before inventing new request bodies
 - When changing map or overview behavior, preserve live updates and avoid forcing the user to lose zoom/pan state
+- When touching the local map widget, verify both the standalone render path and the embedded overview path, because they share logic but have different `shadowRoot` structure
 - When changing button actions, keep Home Assistant auth-aware API calls through the existing backend views rather than raw browser fetches
 - If investigating missing `app/*` topics, verify the broker delivery path before changing the subscription code

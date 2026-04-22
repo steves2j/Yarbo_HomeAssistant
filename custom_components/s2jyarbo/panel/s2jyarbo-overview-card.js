@@ -111,15 +111,33 @@ class YarboOverviewCard extends HTMLElement {
     return 7;
   }
 
+  getGridOptions() {
+    return {
+      columns: "full",
+      min_columns: 12,
+      max_columns: 12,
+      min_rows: 6,
+    };
+  }
+
   static getStubConfig(...args) {
     for (const arg of args) {
-      const config = YarboOverviewCard._extractStubConfigFromArg(arg);
-      if (config) {
-        return config;
+      const selector = YarboOverviewCard._extractStubConfigFromArg(arg);
+      if (selector) {
+        return {
+          ...selector,
+          layout_options: {
+            grid_columns: "full",
+          },
+        };
       }
     }
 
-    return {};
+    return {
+      layout_options: {
+        grid_columns: "full",
+      },
+    };
   }
 
   async _startRefreshing() {
@@ -238,10 +256,6 @@ class YarboOverviewCard extends HTMLElement {
 
     if (typeof arg.entry_id === "string" && arg.entry_id) {
       return { entry_id: arg.entry_id };
-    }
-
-    if (typeof arg.id === "string" && arg.id) {
-      return arg.id.includes(".") ? { entity_id: arg.id } : { device_id: arg.id };
     }
 
     return null;
@@ -453,99 +467,7 @@ class YarboOverviewCard extends HTMLElement {
   }
 
   async _attachMaps() {
-    let helpers;
-    try {
-      helpers = await this._ensureHelpers();
-    } catch (err) {
-      this._error = err instanceof Error ? err.message : String(err);
-      this._render();
-      return;
-    }
-
-    if (!this.shadowRoot) {
-      return;
-    }
-
-    const activeCardKeys = new Set();
-
-    for (const entry of this._entries) {
-      const location = this._entryLocation(entry);
-      const trackerId = entry.tracker_entity_id;
-      const hasFix =
-        trackerId &&
-        location.latitude !== null &&
-        location.latitude !== undefined &&
-        location.longitude !== null &&
-        location.longitude !== undefined &&
-        (location.fix_quality === null ||
-          location.fix_quality === undefined ||
-          Number(location.fix_quality) > 0);
-
-      const container = this.shadowRoot.querySelector(`[data-map-host="${entry.entry_id}"]`);
-      if (!container) {
-        continue;
-      }
-
-      if (!trackerId || (!entry.site_map && !hasFix)) {
-        this._clearSiteMapOverlay(entry.entry_id);
-        continue;
-      }
-
-      activeCardKeys.add(entry.entry_id);
-
-      let mapCard = this._mapCards.get(entry.entry_id);
-      const hoursToShow = this._hiddenBreadcrumbEntries.has(entry.entry_id) ? 0 : 24;
-      const config = {
-        type: "map",
-        entities: [trackerId],
-        default_zoom: 22,
-        hours_to_show: hoursToShow,
-      };
-      const configSignature = JSON.stringify({
-        entities: config.entities,
-        default_zoom: config.default_zoom,
-        hours_to_show: config.hours_to_show,
-      });
-
-      if (!mapCard) {
-        mapCard = await helpers.createCardElement(config);
-        this._mapCards.set(entry.entry_id, mapCard);
-        this._mapTrackerIds.set(entry.entry_id, trackerId);
-        this._mapCardConfigs.set(entry.entry_id, configSignature);
-      } else if (
-        mapCard.setConfig &&
-        this._mapCardConfigs.get(entry.entry_id) !== configSignature
-      ) {
-        mapCard.setConfig(config);
-        this._mapTrackerIds.set(entry.entry_id, trackerId);
-        this._mapCardConfigs.set(entry.entry_id, configSignature);
-      }
-
-      mapCard.hass = this._hass;
-      if (mapCard.parentElement !== container) {
-        container.replaceChildren(mapCard);
-      }
-
-      await this._ensureDirectionalMarker(entry, mapCard);
-
-      if (entry.site_map) {
-        await this._applySiteMapOverlay(entry, mapCard);
-      } else {
-        this._clearSiteMapOverlay(entry.entry_id);
-      }
-    }
-
-    for (const [key, mapCard] of this._mapCards.entries()) {
-      if (!activeCardKeys.has(key) && mapCard.parentElement) {
-        mapCard.parentElement.removeChild(mapCard);
-      }
-      if (!activeCardKeys.has(key)) {
-        this._mapCardConfigs.delete(key);
-        this._clearSiteMapOverlay(key);
-        this._clearDirectionalMarker(key);
-        this._clearNativeMarkerSuppression(key);
-      }
-    }
+    return;
   }
 
   _render() {
@@ -570,6 +492,7 @@ class YarboOverviewCard extends HTMLElement {
     if (!stack) {
       return;
     }
+    stack.classList.toggle("single-device", this._entries.length === 1);
 
     const seenEntries = new Set();
 
@@ -705,6 +628,9 @@ class YarboOverviewCard extends HTMLElement {
           display: grid;
           gap: 18px;
           grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .stack.single-device > .device {
+          grid-column: 1 / -1;
         }
         .device {
           background: color-mix(in srgb, var(--primary-background-color) 88%, var(--card-background-color));
@@ -2325,22 +2251,16 @@ class YarboOverviewCard extends HTMLElement {
       return;
     }
 
-    const siteLeaflet = this._siteLeafletMaps.get(entry.entry_id);
-    if (siteLeaflet) {
-      siteLeaflet.map.remove();
-      this._siteLeafletMaps.delete(entry.entry_id);
+    let widget = mapContainer.querySelector("s2jyarbo-map-widget");
+    if (!widget) {
+      widget = document.createElement("s2jyarbo-map-widget");
+      widget.embedded = true;
+      mapContainer.replaceChildren(widget);
     }
 
-    if (entry.site_map || (trackerEntityId && hasFix)) {
-      this._ensureNativeMapShell(mapContainer, entry, location);
-      return;
-    }
-
-    const mapCard = this._mapCards.get(entry.entry_id);
-    if (mapCard?.parentElement === mapContainer.querySelector(".map-shell")) {
-      mapCard.parentElement.removeChild(mapCard);
-    }
-    mapContainer.innerHTML = this._renderMapFallback(location);
+    widget.embedded = true;
+    widget.entryData = entry;
+    widget.hass = this._hass;
   }
 
   _updateTrailToggle(section, entry) {
@@ -2349,17 +2269,7 @@ class YarboOverviewCard extends HTMLElement {
       return;
     }
 
-    const hasTracker = Boolean(entry.tracker_entity_id);
-    const isHidden = this._hiddenBreadcrumbEntries.has(entry.entry_id);
-    button.hidden = !hasTracker;
-    button.disabled = !hasTracker;
-    button.textContent = isHidden ? "Show Trail" : "Hide Trail";
-    button.classList.toggle("is-hidden", isHidden);
-    button.setAttribute(
-      "aria-label",
-      isHidden ? "Show breadcrumb trail" : "Hide breadcrumb trail",
-    );
-    button.title = isHidden ? "Show breadcrumb trail" : "Hide breadcrumb trail";
+    button.hidden = true;
   }
 
   _toggleBreadcrumbs(entryId) {
@@ -4045,7 +3955,7 @@ if (!window.customCards.some((card) => card.type === "s2jyarbo-overview-card")) 
   window.customCards.push({
     type: "s2jyarbo-overview-card",
     name: "S2JYarbo Overview",
-    description: "Overview widgets for every configured S2JYarbo device, including live map position.",
-    preview: true,
+    description: "Overview widget for one configured S2JYarbo device, including live map position.",
+    preview: false,
   });
 }

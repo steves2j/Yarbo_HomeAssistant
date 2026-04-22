@@ -19,9 +19,7 @@ Project backlog and near-term ideas for the Yarbo Home Assistant integration.
 
 ## Mapping and visuals
 
-- Google Maps integration for aerial views
-  - Investigate using aerial/satellite imagery alongside the current map view.
-  - Evaluate licensing, API requirements, and whether this should be optional.
+- Add Ariel overview background with map warping to match the Yarbo plan mapping.
 
 ## Home Assistant integration depth
 

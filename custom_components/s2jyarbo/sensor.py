@@ -87,7 +87,7 @@ class YarboStatusSensor(YarboBaseSensor):
         return self._runtime.state.connection_state
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | int | bool | None]:
+    def extra_state_attributes(self) -> dict[str, str | int | float | bool | None]:
         """Return diagnostic attributes for the MQTT connection."""
         state = self._runtime.state
         summary = state.device_summary or {}
@@ -117,6 +117,14 @@ class YarboStatusSensor(YarboBaseSensor):
             "schedule_msg": summary.get("schedule_msg"),
             "machine_controller": summary.get("machine_controller"),
             "heading": summary.get("heading"),
+            "left_wheel_speed": summary.get("left_wheel_speed"),
+            "right_wheel_speed": summary.get("right_wheel_speed"),
+            "left_wheel_distance": summary.get("left_wheel_distance"),
+            "right_wheel_distance": summary.get("right_wheel_distance"),
+            "left_blade_motor_speed": summary.get("left_blade_motor_speed"),
+            "right_blade_motor_speed": summary.get("right_blade_motor_speed"),
+            "left_blade_motor_rpm": summary.get("left_blade_motor_rpm"),
+            "right_blade_motor_rpm": summary.get("right_blade_motor_rpm"),
             "rtk_fix_label": summary.get("rtk_fix_label"),
             "summary_source": summary.get("summary_source"),
             "body_firmware_version": summary.get("body_firmware_version"),
