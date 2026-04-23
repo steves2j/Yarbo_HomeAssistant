@@ -11,11 +11,6 @@ Project backlog and near-term ideas for the Yarbo Home Assistant integration.
 - Global settings outputs
   - Expose `read_global_params` data in a cleaner Home Assistant-friendly form.
 
-## Plans and execution
-
-- Plan running with pause and resume
-  - Add plan execution controls beyond start/stop.
-  - Support pause and resume if the device protocol allows it.
 
 ## Mapping and visuals
 

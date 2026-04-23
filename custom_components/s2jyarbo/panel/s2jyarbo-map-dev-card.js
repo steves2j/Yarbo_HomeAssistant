@@ -19,12 +19,14 @@ class S2JYarboMapCard extends HTMLElement {
     this._structureReady = false;
     this._refreshHandle = null;
     this._reloadHandle = null;
+    this._lastLoadTimestamp = 0;
     this._lastEntitySignature = "";
     this._mapRequestPending = false;
     this._mapRequestTimestamp = 0;
     this._followMode = true;
     this._trailVisible = true;
     this._planFeedbackVisible = true;
+    this._cloudPointsVisible = true;
     this._viewState = {
       scale: 1,
       panX: 0,
@@ -255,6 +257,7 @@ class S2JYarboMapCard extends HTMLElement {
 
       this._entry = entries[0] || null;
       this._error = "";
+      this._lastLoadTimestamp = Date.now();
       this._syncReferenceState();
       this._recordBreadcrumb();
       this._lastEntitySignature = this._buildEntitySignature();
@@ -291,7 +294,7 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _liveUpdatesEnabled() {
-    return this._embedded || this._config?.live_updates === true;
+    return this._embedded || this._config?.live_updates !== false;
   }
 
   _handleHassUpdate() {
@@ -307,6 +310,9 @@ class S2JYarboMapCard extends HTMLElement {
     this._lastEntitySignature = signature;
     this._recordBreadcrumb();
     this._maybeRequestMapData(this._entry);
+    if (Date.now() - this._lastLoadTimestamp >= 5000) {
+      this._scheduleReload(0);
+    }
     this._render();
   }
 
@@ -804,6 +810,7 @@ class S2JYarboMapCard extends HTMLElement {
               <button class="map-button ${this._followMode ? "is-active" : ""}" type="button" data-action="follow">${this._followMode ? "Following" : "Follow"}</button>
               <button class="map-button ${this._trailVisible ? "is-active" : ""}" type="button" data-action="trail">${this._trailVisible ? "Trail On" : "Trail Off"}</button>
               <button class="map-button ${this._planFeedbackVisible ? "is-active" : ""}" type="button" data-action="plan-feedback">${this._planFeedbackVisible ? "Plan On" : "Plan Off"}</button>
+              <button class="map-button ${this._cloudPointsVisible ? "is-active" : ""}" type="button" data-action="cloud-points">${this._cloudPointsVisible ? "Barrier On" : "Barrier Off"}</button>
               <button class="map-button" type="button" data-action="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
               <button class="map-button" type="button" data-action="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
               <button class="map-button" type="button" data-action="reset">Reset</button>
@@ -830,7 +837,7 @@ class S2JYarboMapCard extends HTMLElement {
                   ${drawing.fenceShapes}
                   ${drawing.noGoShapes}
                   ${this._planFeedbackVisible ? drawing.planFeedbackShapes : ""}
-                  ${drawing.cloudPointsShapes}
+                  ${this._cloudPointsVisible ? drawing.cloudPointsShapes : ""}
                   ${drawing.rechargePathShape}
                   ${drawing.pathwayShapes}
                   ${drawing.chargingShapes}
@@ -874,6 +881,11 @@ class S2JYarboMapCard extends HTMLElement {
 
     body.querySelector('[data-action="plan-feedback"]')?.addEventListener("click", () => {
       this._planFeedbackVisible = !this._planFeedbackVisible;
+      this._render();
+    });
+
+    body.querySelector('[data-action="cloud-points"]')?.addEventListener("click", () => {
+      this._cloudPointsVisible = !this._cloudPointsVisible;
       this._render();
     });
 
@@ -1223,9 +1235,9 @@ class S2JYarboMapCard extends HTMLElement {
   _renderPlanFeedbackSegment(segment) {
     const segmentType = Number(segment?.type);
     const pendingStroke =
-      segmentType === 1 ? "rgba(160, 255, 10, 0.18)" : "rgba(132, 204, 22, 0.18)";
+      segmentType === 1 ? "rgba(132, 204, 22, 0.18)" : "rgba(132, 204, 22, 0.18)";
     const visitedStroke =
-      segmentType === 1 ? "rgba(160, 255, 10, 0.9)" : "rgba(132, 204, 22, 0.9)";
+      segmentType === 1 ? "rgba(132, 204, 22, 0.9)" : "rgba(132, 204, 22, 0.9)";
     const dashArray = segmentType === 1 ? "5 3" : "2.5 2";
     const progress = this._planFeedbackSegmentProgress(segment);
     const parts = [];
@@ -1312,7 +1324,7 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _planFeedback(entry) {
-    if (this._config?.show_plan_feedback === false) {
+    if (this._embedded || this._config?.show_plan_feedback === false) {
       return null;
     }
 
@@ -1325,7 +1337,7 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _cloudPointsFeedback(entry) {
-    if (this._config?.show_cloud_points === false) {
+    if (this._embedded || this._config?.show_cloud_points === false) {
       return null;
     }
 
@@ -1338,7 +1350,7 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _rechargeFeedback(entry) {
-    if (this._config?.show_recharge_feedback === false) {
+    if (this._embedded || this._config?.show_recharge_feedback === false) {
       return null;
     }
 
@@ -1352,7 +1364,7 @@ class S2JYarboMapCard extends HTMLElement {
 
   _renderPlanFeedbackSummary(entry) {
     const planFeedback = entry?.plan_feedback;
-    if (!planFeedback || this._planTelemetryState(entry) === "stopped") {
+    if (!planFeedback) {
       return "";
     }
 
@@ -1380,29 +1392,6 @@ class S2JYarboMapCard extends HTMLElement {
           .join("")}
       </div>
     `;
-  }
-
-  _planTelemetryState(entry) {
-    const summary = entry?.summary || {};
-    const hasPlanningFlags =
-      summary.planning_paused !== null &&
-        summary.planning_paused !== undefined
-      || summary.on_going_planning !== null &&
-        summary.on_going_planning !== undefined;
-
-    if (summary.planning_paused === true) {
-      return "paused";
-    }
-
-    if (summary.on_going_planning === true) {
-      return "running";
-    }
-
-    if (hasPlanningFlags) {
-      return "stopped";
-    }
-
-    return entry?.plan_feedback?.plan_running ? "running" : "stopped";
   }
 
   _planFeedbackSegmentProgress(segment) {
@@ -1692,71 +1681,6 @@ class S2JYarboMapCard extends HTMLElement {
 
   _renderCalibrationWarning(entry) {
     return "";
-  }
-
-  _planNameText(entry, planFeedback) {
-    const planId = planFeedback?.plan_id;
-    const planIdText = planId === null || planId === undefined ? "" : String(planId);
-    const plans = Array.isArray(entry?.plans) ? entry.plans : [];
-    const match = plans.find((candidate) => String(candidate?.id ?? "") === planIdText);
-    if (match?.name) {
-      return String(match.name);
-    }
-
-    return planIdText ? `Plan ${planIdText}` : "Unknown";
-  }
-
-  _progressText(value) {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) {
-      return "Unknown";
-    }
-
-    return `${numeric.toFixed(1)}%`;
-  }
-
-  _areaText(value) {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) {
-      return "Unknown";
-    }
-
-    return `${numeric.toFixed(1)} m²`;
-  }
-
-  _estimateText(leftTime, totalTime) {
-    const leftText = this._durationText(leftTime);
-    const totalText = this._durationText(totalTime);
-    if (!leftText && !totalText) {
-      return "Unknown";
-    }
-    if (!leftText) {
-      return totalText;
-    }
-    if (!totalText) {
-      return leftText;
-    }
-    return `${leftText} / ${totalText}`;
-  }
-
-  _durationText(value) {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric) || numeric < 0) {
-      return "";
-    }
-
-    const roundedSeconds = Math.round(numeric);
-    const hours = Math.floor(roundedSeconds / 3600);
-    const minutes = Math.floor((roundedSeconds % 3600) / 60);
-    const seconds = roundedSeconds % 60;
-
-    if (hours > 0) {
-      return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-    }
-    if (minutes > 0) {
-      return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-    }
-    return `${seconds}s`;
   }
 
   _entryLocation(entry) {
@@ -2058,6 +1982,83 @@ class S2JYarboMapCard extends HTMLElement {
     return `${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`;
   }
 
+  _planRunningText(planFeedback) {
+    if (planFeedback?.plan_running === true) {
+      return "Running";
+    }
+    if (planFeedback?.plan_running === false) {
+      return "Stopped";
+    }
+
+    const state = Number(planFeedback?.state);
+    return Number.isFinite(state) ? `State ${state}` : "Unknown";
+  }
+
+  _planNameText(entry, planFeedback) {
+    const planId = String(planFeedback?.plan_id ?? "");
+    if (!planId) {
+      return "Unknown";
+    }
+
+    const plans = Array.isArray(entry?.plans) ? entry.plans : [];
+    const match = plans.find((plan) => String(plan?.id ?? "") === planId);
+    if (match?.name) {
+      return String(match.name);
+    }
+
+    return `Plan ${planId}`;
+  }
+
+  _progressText(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return "—";
+    }
+
+    return `${numeric.toFixed(1)}%`;
+  }
+
+  _areaText(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return "—";
+    }
+
+    return `${numeric.toFixed(1)} m²`;
+  }
+
+  _estimateText(leftTime, totalTime) {
+    const left = this._durationText(leftTime);
+    const total = this._durationText(totalTime);
+    if (left === "—" && total === "—") {
+      return "—";
+    }
+    if (total === "—") {
+      return left;
+    }
+    if (left === "—") {
+      return `of ${total}`;
+    }
+
+    return `${left} / ${total}`;
+  }
+
+  _durationText(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return "—";
+    }
+
+    const roundedSeconds = Math.max(0, Math.round(numeric));
+    const hours = Math.floor(roundedSeconds / 3600);
+    const minutes = Math.floor((roundedSeconds % 3600) / 60);
+
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+  }
+
   _updateCanvasInsets(mapCanvas) {
     if (!(mapCanvas instanceof HTMLElement)) {
       return;
@@ -2133,6 +2134,20 @@ class S2JYarboMapCard extends HTMLElement {
   }
 }
 
-if (!customElements.get("s2jyarbo-map-widget")) {
-  customElements.define("s2jyarbo-map-widget", S2JYarboMapCard);
+if (!customElements.get("s2jyarbo-map-card")) {
+  customElements.define(
+    "s2jyarbo-map-card",
+    class S2JYarboStandaloneMapCard extends S2JYarboMapCard {},
+  );
+}
+
+window.customCards = window.customCards || [];
+if (!window.customCards.some((card) => card.type === "s2jyarbo-map-card")) {
+  window.customCards.push({
+    type: "s2jyarbo-map-card",
+    name: "S2JYarbo Map",
+    description:
+      "Development map card using cached decoded get_map geometry with optional live updates.",
+    preview: false,
+  });
 }

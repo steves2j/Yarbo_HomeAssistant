@@ -25,6 +25,8 @@ class YarboOverviewCard extends HTMLElement {
     this._lastEntitySignature = "";
     this._rechargingEntries = new Set();
     this._startingEntries = new Set();
+    this._pausingEntries = new Set();
+    this._resumingEntries = new Set();
     this._stoppingEntries = new Set();
     this._shuttingDownEntries = new Set();
     this._restartingEntries = new Set();
@@ -38,6 +40,8 @@ class YarboOverviewCard extends HTMLElement {
     this._actionStatus = new Map();
     this._actionStatusTimers = new Map();
     this._selectedPlans = new Map();
+    this._planStartPercents = new Map();
+    this._lastPlanActionStates = new Map();
     this._volumeDrafts = new Map();
     this._hiddenBreadcrumbEntries = new Set();
     this._trailPreferenceInitialized = new Set();
@@ -750,7 +754,6 @@ class YarboOverviewCard extends HTMLElement {
         }
         .device-battery:disabled {
           cursor: default;
-          opacity: 0.58;
           transform: none;
         }
         .battery-icon {
@@ -1092,11 +1095,15 @@ class YarboOverviewCard extends HTMLElement {
           gap: 10px 12px;
         }
         .plan-picker {
+          display: grid;
+          flex: 1 1 240px;
+          gap: 8px;
+          min-width: 220px;
+        }
+        .plan-picker-row {
           align-items: center;
           display: flex;
-          flex: 1 1 240px;
           gap: 10px;
-          min-width: 220px;
         }
         .plan-picker-label {
           color: var(--secondary-text-color);
@@ -1132,6 +1139,36 @@ class YarboOverviewCard extends HTMLElement {
         .plan-picker select:disabled {
           cursor: default;
           opacity: 0.68;
+        }
+        .plan-start-control {
+          display: grid;
+          gap: 6px;
+          padding-left: 56px;
+        }
+        .plan-start-header {
+          align-items: center;
+          display: flex;
+          gap: 12px;
+          justify-content: space-between;
+        }
+        .plan-start-label {
+          color: var(--secondary-text-color);
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+        .plan-start-value {
+          font-size: 12px;
+          font-weight: 700;
+        }
+        .plan-start-slider {
+          accent-color: var(--primary-color);
+          width: 100%;
+        }
+        .plan-start-slider:disabled {
+          cursor: default;
+          opacity: 0.55;
         }
         .action-button,
         .stop-button {
@@ -1476,10 +1513,19 @@ class YarboOverviewCard extends HTMLElement {
       </div>
       <div class="device-actions">
         <label class="plan-picker">
-          <span class="plan-picker-label">Plan</span>
-          <select class="plan-select">
-            <option value="">No plans loaded</option>
-          </select>
+          <div class="plan-picker-row">
+            <span class="plan-picker-label">Plan</span>
+            <select class="plan-select">
+              <option value="">No plans loaded</option>
+            </select>
+          </div>
+          <div class="plan-start-control">
+            <span class="plan-start-header">
+              <span class="plan-start-label">Start At</span>
+              <span class="plan-start-value">0%</span>
+            </span>
+            <input class="plan-start-slider" type="range" min="0" max="100" step="1" value="0" />
+          </div>
         </label>
         <button class="action-button icon-only" type="button" aria-label="Start Plan" title="Start Plan">
           <ha-icon class="button-icon" icon="mdi:play" aria-hidden="true"></ha-icon>
@@ -1535,7 +1581,7 @@ class YarboOverviewCard extends HTMLElement {
     `;
     const actionButton = section.querySelector(".action-button");
     actionButton?.addEventListener("click", () => {
-      this._startPlan(entryId);
+      void this._handlePrimaryPlanAction(entryId);
     });
     const stopButton = section.querySelector(".stop-button");
     stopButton?.addEventListener("click", () => {
@@ -1569,6 +1615,14 @@ class YarboOverviewCard extends HTMLElement {
       } else {
         this._selectedPlans.delete(entryId);
       }
+    });
+    const planStartSlider = section.querySelector(".plan-start-slider");
+    planStartSlider?.addEventListener("input", (event) => {
+      const nextValue = event.target instanceof HTMLInputElement
+        ? Number(event.target.value)
+        : 0;
+      this._planStartPercents.set(entryId, nextValue);
+      this._updatePlanStartPercentDisplay(section, nextValue);
     });
     const trailToggle = section.querySelector(".map-trail-toggle");
     trailToggle?.addEventListener("click", () => {
@@ -1726,9 +1780,14 @@ class YarboOverviewCard extends HTMLElement {
       batteryBadge.classList.add(`battery-${batteryTone}`);
       const batteryLabelText = this._batteryAriaLabel(batterySoc, charging);
       batteryBadge.disabled =
-        this._rechargingEntries.has(entry.entry_id) || connectionState !== "connected";
-      batteryBadge.setAttribute("aria-label", `${batteryLabelText}. Click to Recharge.`);
-      batteryBadge.title = "Click to Recharge";
+        this._rechargingEntries.has(entry.entry_id) ||
+        connectionState !== "connected" ||
+        charging;
+      batteryBadge.setAttribute(
+        "aria-label",
+        charging ? batteryLabelText : `${batteryLabelText}. Click to Recharge.`,
+      );
+      batteryBadge.title = charging ? "" : "Click to Recharge";
     }
     batteryCells.forEach((cell, index) => {
       cell.classList.toggle("is-active", index < batteryBars);
@@ -1738,6 +1797,17 @@ class YarboOverviewCard extends HTMLElement {
     if (chipRow) {
       chipRow.innerHTML = chips.join("");
     }
+
+    const planActionState = this._planActionState(entry);
+    const previousPlanActionState = this._lastPlanActionStates.get(entry.entry_id);
+    if (
+      previousPlanActionState &&
+      previousPlanActionState !== "stopped" &&
+      planActionState === "stopped"
+    ) {
+      this._resetPlanStartPercent(entry.entry_id);
+    }
+    this._lastPlanActionStates.set(entry.entry_id, planActionState);
 
     const planSelect = section.querySelector(".plan-select");
     if (planSelect) {
@@ -1770,6 +1840,14 @@ class YarboOverviewCard extends HTMLElement {
       planSelect.setAttribute("aria-label", planTitle);
     }
 
+    const currentStartPercent = this._resolvedPlanStartPercent(entry.entry_id);
+    const planStartSlider = section.querySelector(".plan-start-slider");
+    if (planStartSlider) {
+      planStartSlider.value = String(currentStartPercent);
+      planStartSlider.disabled = connectionState !== "connected";
+    }
+    this._updatePlanStartPercentDisplay(section, currentStartPercent);
+
     const metricsContainer = section.querySelector(".metrics");
     if (metricsContainer) {
       metricsContainer.innerHTML = metrics;
@@ -1778,19 +1856,39 @@ class YarboOverviewCard extends HTMLElement {
     const actionButton = section.querySelector(".action-button");
     if (actionButton) {
       const hasSelectedPlan = plans.length > 0 && this._selectedPlans.has(entry.entry_id);
-      actionButton.disabled =
+      const actionBusy =
         this._startingEntries.has(entry.entry_id) ||
+        this._pausingEntries.has(entry.entry_id) ||
+        this._resumingEntries.has(entry.entry_id) ||
         this._stoppingEntries.has(entry.entry_id) ||
         this._shuttingDownEntries.has(entry.entry_id) ||
-        this._restartingEntries.has(entry.entry_id) ||
+        this._restartingEntries.has(entry.entry_id);
+      actionButton.disabled =
+        actionBusy ||
         connectionState !== "connected" ||
-        !hasSelectedPlan;
+        (planActionState === "stopped" && !hasSelectedPlan);
       const actionButtonLabel = actionButton.querySelector(".button-label");
-      const actionButtonText = this._startingEntries.has(entry.entry_id)
-        ? "Starting..."
-        : "Start Plan";
+      const actionButtonIcon = actionButton.querySelector(".button-icon");
+      let actionButtonText = "Start Plan";
+      let actionButtonIconName = "mdi:play";
+      if (this._startingEntries.has(entry.entry_id)) {
+        actionButtonText = "Starting...";
+      } else if (this._pausingEntries.has(entry.entry_id)) {
+        actionButtonText = "Pausing...";
+        actionButtonIconName = "mdi:pause";
+      } else if (this._resumingEntries.has(entry.entry_id)) {
+        actionButtonText = "Resuming...";
+      } else if (planActionState === "running") {
+        actionButtonText = "Pause Plan";
+        actionButtonIconName = "mdi:pause";
+      } else if (planActionState === "paused") {
+        actionButtonText = "Resume Plan";
+      }
       if (actionButtonLabel) {
         actionButtonLabel.textContent = actionButtonText;
+      }
+      if (actionButtonIcon) {
+        actionButtonIcon.setAttribute("icon", actionButtonIconName);
       }
       actionButton.title = actionButtonText;
       actionButton.setAttribute("aria-label", actionButtonText);
@@ -1801,6 +1899,8 @@ class YarboOverviewCard extends HTMLElement {
       stopButton.disabled =
         this._stoppingEntries.has(entry.entry_id) ||
         this._startingEntries.has(entry.entry_id) ||
+        this._pausingEntries.has(entry.entry_id) ||
+        this._resumingEntries.has(entry.entry_id) ||
         this._shuttingDownEntries.has(entry.entry_id) ||
         this._restartingEntries.has(entry.entry_id) ||
         connectionState !== "connected";
@@ -1822,6 +1922,8 @@ class YarboOverviewCard extends HTMLElement {
       this._shuttingDownEntries.has(entry.entry_id) ||
       this._restartingEntries.has(entry.entry_id) ||
       this._startingEntries.has(entry.entry_id) ||
+      this._pausingEntries.has(entry.entry_id) ||
+      this._resumingEntries.has(entry.entry_id) ||
       this._stoppingEntries.has(entry.entry_id);
     if (enableButton) {
       enableButton.disabled = powerActionsBusy || connectionState !== "connected";
@@ -1907,8 +2009,31 @@ class YarboOverviewCard extends HTMLElement {
     this._maybeRefreshStaleData(entry);
   }
 
+  async _handlePrimaryPlanAction(entryId) {
+    const entry = this._entries.find((candidate) => candidate.entry_id === entryId);
+    if (!entry) {
+      return;
+    }
+
+    const actionState = this._planActionState(entry);
+    if (actionState === "running") {
+      await this._pausePlan(entryId);
+      return;
+    }
+    if (actionState === "paused") {
+      await this._resumePlan(entryId);
+      return;
+    }
+    await this._startPlan(entryId);
+  }
+
   async _startPlan(entryId) {
-    if (!this._hass || this._startingEntries.has(entryId)) {
+    if (
+      !this._hass ||
+      this._startingEntries.has(entryId) ||
+      this._pausingEntries.has(entryId) ||
+      this._resumingEntries.has(entryId)
+    ) {
       return;
     }
 
@@ -1934,14 +2059,16 @@ class YarboOverviewCard extends HTMLElement {
     this._render();
 
     try {
+      const startPercent = this._resolvedPlanStartPercent(entryId);
       const response = await this._hass.callApi("POST", "s2jyarbo/start_plan", {
         entry_id: entryId,
         plan_id: selectedPlanId,
+        percent: startPercent,
       });
       const topic = response?.topic || "command topic";
       this._setActionStatus(
         entryId,
-        `Started ${selectedPlan.name} via ${topic}`,
+        `Started ${selectedPlan.name} at ${Math.round(startPercent)}% via ${topic}`,
         "info",
       );
       this._scheduleDashboardReload(200);
@@ -1953,6 +2080,86 @@ class YarboOverviewCard extends HTMLElement {
       );
     } finally {
       this._startingEntries.delete(entryId);
+      this._render();
+    }
+  }
+
+  async _pausePlan(entryId) {
+    if (
+      !this._hass ||
+      this._pausingEntries.has(entryId) ||
+      this._startingEntries.has(entryId) ||
+      this._resumingEntries.has(entryId)
+    ) {
+      return;
+    }
+
+    const entry = this._entries.find((candidate) => candidate.entry_id === entryId);
+    if (!entry || entry.connection_state !== "connected") {
+      this._setActionStatus(entryId, "Device is not connected.", "error");
+      this._render();
+      return;
+    }
+
+    this._pausingEntries.add(entryId);
+    this._actionStatus.delete(entryId);
+    this._render();
+
+    try {
+      const response = await this._hass.callApi("POST", "s2jyarbo/pause", {
+        entry_id: entryId,
+      });
+      const topic = response?.topic || "command topic";
+      this._setActionStatus(entryId, `Pause command sent via ${topic}`, "info");
+      this._scheduleDashboardReload(200);
+    } catch (err) {
+      this._setActionStatus(
+        entryId,
+        `Pause failed: ${err instanceof Error ? err.message : String(err)}`,
+        "error",
+      );
+    } finally {
+      this._pausingEntries.delete(entryId);
+      this._render();
+    }
+  }
+
+  async _resumePlan(entryId) {
+    if (
+      !this._hass ||
+      this._resumingEntries.has(entryId) ||
+      this._startingEntries.has(entryId) ||
+      this._pausingEntries.has(entryId)
+    ) {
+      return;
+    }
+
+    const entry = this._entries.find((candidate) => candidate.entry_id === entryId);
+    if (!entry || entry.connection_state !== "connected") {
+      this._setActionStatus(entryId, "Device is not connected.", "error");
+      this._render();
+      return;
+    }
+
+    this._resumingEntries.add(entryId);
+    this._actionStatus.delete(entryId);
+    this._render();
+
+    try {
+      const response = await this._hass.callApi("POST", "s2jyarbo/resume", {
+        entry_id: entryId,
+      });
+      const topic = response?.topic || "command topic";
+      this._setActionStatus(entryId, `Resume command sent via ${topic}`, "info");
+      this._scheduleDashboardReload(200);
+    } catch (err) {
+      this._setActionStatus(
+        entryId,
+        `Resume failed: ${err instanceof Error ? err.message : String(err)}`,
+        "error",
+      );
+    } finally {
+      this._resumingEntries.delete(entryId);
       this._render();
     }
   }
@@ -2012,7 +2219,9 @@ class YarboOverviewCard extends HTMLElement {
         entry_id: entryId,
       });
       const topic = response?.topic || "command topic";
+      this._resetPlanStartPercent(entryId);
       this._setActionStatus(entryId, `Stop command sent via ${topic}`, "info");
+      this._scheduleDashboardReload(200);
     } catch (err) {
       this._setActionStatus(
         entryId,
@@ -2194,10 +2403,61 @@ class YarboOverviewCard extends HTMLElement {
     this._actionStatusTimers.set(entryId, timer);
   }
 
+  _planActionState(entry) {
+    const summary = entry?.summary || {};
+    const hasPlanningFlags =
+      summary.planning_paused !== null &&
+        summary.planning_paused !== undefined
+      || summary.on_going_planning !== null &&
+        summary.on_going_planning !== undefined;
+
+    if (summary.planning_paused === true) {
+      return "paused";
+    }
+
+    if (summary.on_going_planning === true) {
+      return "running";
+    }
+
+    if (hasPlanningFlags) {
+      return "stopped";
+    }
+
+    if (entry?.plan_feedback?.plan_running) {
+      return "running";
+    }
+
+    return "stopped";
+  }
+
   _updateVolumeDisplay(section, percent) {
     const volumeValue = section.querySelector(".volume-value");
     if (volumeValue) {
       volumeValue.textContent = `${Math.round(percent)}%`;
+    }
+  }
+
+  _resolvedPlanStartPercent(entryId) {
+    const storedPercent = Number(this._planStartPercents.get(entryId));
+    if (!Number.isFinite(storedPercent)) {
+      this._planStartPercents.set(entryId, 0);
+      return 0;
+    }
+
+    const resolvedPercent = Math.min(100, Math.max(0, Math.round(storedPercent)));
+    this._planStartPercents.set(entryId, resolvedPercent);
+    return resolvedPercent;
+  }
+
+  _resetPlanStartPercent(entryId) {
+    this._planStartPercents.set(entryId, 0);
+  }
+
+  _updatePlanStartPercentDisplay(section, percent) {
+    const resolvedPercent = Math.min(100, Math.max(0, Math.round(Number(percent) || 0)));
+    const percentValue = section.querySelector(".plan-start-value");
+    if (percentValue) {
+      percentValue.textContent = `${resolvedPercent}%`;
     }
   }
 

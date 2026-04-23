@@ -75,6 +75,16 @@ def build_start_plan_topic(serial_number: str) -> str:
     return _build_app_topic(serial_number, "start_plan")
 
 
+def build_pause_topic(serial_number: str) -> str:
+    """Build the MQTT topic used to pause the current plan."""
+    return _build_app_topic(serial_number, "pause")
+
+
+def build_resume_topic(serial_number: str) -> str:
+    """Build the MQTT topic used to resume the current plan."""
+    return _build_app_topic(serial_number, "resume")
+
+
 def build_stop_topic(serial_number: str) -> str:
     """Build the MQTT topic used to stop the current action."""
     return _build_app_topic(serial_number, "stop")

@@ -33,6 +33,8 @@ REQUEST_DEVICE_MSG_API_URL = "/api/s2jyarbo/request_device_msg"
 REQUEST_MAP_API_URL = "/api/s2jyarbo/request_map"
 REFRESH_DEVICE_DATA_API_URL = "/api/s2jyarbo/refresh_device_data"
 START_PLAN_API_URL = "/api/s2jyarbo/start_plan"
+PAUSE_API_URL = "/api/s2jyarbo/pause"
+RESUME_API_URL = "/api/s2jyarbo/resume"
 STOP_API_URL = "/api/s2jyarbo/stop"
 SHUTDOWN_API_URL = "/api/s2jyarbo/shutdown"
 RESTART_API_URL = "/api/s2jyarbo/restart"
@@ -41,6 +43,7 @@ RECHARGE_API_URL = "/api/s2jyarbo/recharge"
 PANEL_MODULE_NAME = "s2jyarbo-topics-panel"
 OVERVIEW_CARD_MODULE_NAME = "s2jyarbo-overview-card"
 MAP_CARD_MODULE_NAME = "s2jyarbo-map-card"
+DEV_MAP_CARD_MODULE_NAME = "s2jyarbo-map-dev-card"
 
 
 async def async_register_panel(hass: HomeAssistant) -> None:
@@ -49,9 +52,11 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     panel_module = panel_dir / f"{PANEL_MODULE_NAME}.js"
     overview_module = panel_dir / f"{OVERVIEW_CARD_MODULE_NAME}.js"
     map_module = panel_dir / f"{MAP_CARD_MODULE_NAME}.js"
+    dev_map_module = panel_dir / f"{DEV_MAP_CARD_MODULE_NAME}.js"
     module_version = panel_module.stat().st_mtime_ns
     overview_module_version = overview_module.stat().st_mtime_ns
     map_module_version = map_module.stat().st_mtime_ns
+    dev_map_module_version = dev_map_module.stat().st_mtime_ns
     await hass.http.async_register_static_paths(
         [StaticPathConfig(PANEL_STATIC_URL, str(panel_dir), cache_headers=False)]
     )
@@ -61,6 +66,8 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     hass.http.register_view(YarboRequestMapView(hass))
     hass.http.register_view(YarboRefreshDeviceDataView(hass))
     hass.http.register_view(YarboStartPlanView(hass))
+    hass.http.register_view(YarboPauseView(hass))
+    hass.http.register_view(YarboResumeView(hass))
     hass.http.register_view(YarboStopView(hass))
     hass.http.register_view(YarboShutdownView(hass))
     hass.http.register_view(YarboRestartView(hass))
@@ -69,6 +76,10 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     frontend.add_extra_js_url(
         hass,
         f"{PANEL_STATIC_URL}/{MAP_CARD_MODULE_NAME}.js?v={map_module_version}",
+    )
+    frontend.add_extra_js_url(
+        hass,
+        f"{PANEL_STATIC_URL}/{DEV_MAP_CARD_MODULE_NAME}.js?v={dev_map_module_version}",
     )
     frontend.add_extra_js_url(
         hass,
@@ -341,6 +352,7 @@ class YarboStartPlanView(HomeAssistantView):
         payload = await request.json()
         entry_id = payload.get("entry_id")
         plan_id = payload.get("plan_id")
+        percent = payload.get("percent", 0)
 
         if not isinstance(entry_id, str):
             return web.Response(status=400, text="entry_id is required")
@@ -361,16 +373,111 @@ class YarboStartPlanView(HomeAssistantView):
             return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
-            topic = await runtime.async_start_plan(plan_id)
+            topic = await runtime.async_start_plan(plan_id, percent)
         except ValueError as err:
             return web.Response(status=400, text=str(err))
+        except RuntimeError as err:
+            return web.Response(status=409, text=str(err))
+
+        await runtime.async_clear_topic_samples_by_suffixes(
+            {"/device/recharge_feedback"}
+        )
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "plan_id": str(plan_id),
+                "percent": percent,
+                "topic": topic,
+            }
+        )
+
+
+class YarboPauseView(HomeAssistantView):
+    """Handle widget actions for pausing a plan."""
+
+    url = PAUSE_API_URL
+    name = "api:s2jyarbo:pause"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the pause action API view."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Pause the current plan for one Yarbo device."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+
+        entry = next(
+            (
+                config_entry
+                for config_entry in self._hass.config_entries.async_entries(DOMAIN)
+                if config_entry.entry_id == entry_id
+            ),
+            None,
+        )
+        runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
+
+        if entry is None or runtime is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            topic = await runtime.async_pause()
         except RuntimeError as err:
             return web.Response(status=409, text=str(err))
 
         return self.json(
             {
                 "entry_id": entry.entry_id,
-                "plan_id": str(plan_id),
+                "topic": topic,
+            }
+        )
+
+
+class YarboResumeView(HomeAssistantView):
+    """Handle widget actions for resuming a plan."""
+
+    url = RESUME_API_URL
+    name = "api:s2jyarbo:resume"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the resume action API view."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Resume the current plan for one Yarbo device."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+
+        entry = next(
+            (
+                config_entry
+                for config_entry in self._hass.config_entries.async_entries(DOMAIN)
+                if config_entry.entry_id == entry_id
+            ),
+            None,
+        )
+        runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
+
+        if entry is None or runtime is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            topic = await runtime.async_resume()
+        except RuntimeError as err:
+            return web.Response(status=409, text=str(err))
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
                 "topic": topic,
             }
         )
@@ -686,6 +793,10 @@ def _serialize_dashboard_entry(
         "summary": state.device_summary if state else None,
         "plans": _extract_plan_options(state.topic_samples) if state else [],
         "site_map": _extract_site_map(state.topic_samples) if state else None,
+        "preview_area_path": _extract_preview_area_path(state.topic_samples) if state else None,
+        "plan_feedback": _extract_plan_feedback(state.topic_samples) if state else None,
+        "cloud_points_feedback": _extract_cloud_points_feedback(state.topic_samples) if state else None,
+        "recharge_feedback": _extract_recharge_feedback(state.topic_samples) if state else None,
         "wifi": _extract_wifi_details(state.topic_samples) if state else None,
         "notification_count": state.notification_count if state else 0,
         "last_notification": state.last_notification if state else None,
@@ -858,6 +969,115 @@ def _extract_wifi_details(topic_samples: dict[str, dict[str, Any]]) -> dict[str,
     return None
 
 
+def _extract_preview_area_path(topic_samples: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """Return preview_snowbot_area_path geometry from the cached command sample."""
+    for topic, sample in topic_samples.items():
+        if not topic.endswith("/app/preview_snowbot_area_path"):
+            continue
+
+        body = sample.get("body")
+        if not isinstance(body, str):
+            continue
+
+        preview_path = _parse_preview_area_path(body)
+        if preview_path is not None:
+            preview_path["captured_at"] = sample.get("captured_at")
+            return preview_path
+
+    return None
+
+
+def _extract_plan_feedback(topic_samples: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """Return plan feedback geometry from cached device or command responses."""
+    device_sample = topic_samples.get(
+        next(
+            (topic for topic in topic_samples if topic.endswith("/device/plan_feedback")),
+            "",
+        ),
+    )
+    if isinstance(device_sample, dict):
+        body = device_sample.get("body")
+        if isinstance(body, str):
+            feedback = _parse_plan_feedback_body(body)
+            if feedback is not None:
+                feedback["captured_at"] = device_sample.get("captured_at")
+                feedback["source_topic"] = "device/plan_feedback"
+                return feedback
+
+    command_sample = topic_samples.get(
+        next(
+            (topic for topic in topic_samples if topic.endswith("/app/get_plan_feedback")),
+            "",
+        ),
+    )
+    if not isinstance(command_sample, dict):
+        return None
+
+    response_sample = command_sample.get("response_sample")
+    if not isinstance(response_sample, dict):
+        return None
+
+    response_body = response_sample.get("body")
+    if not isinstance(response_body, str):
+        return None
+
+    feedback = _parse_plan_feedback_body(response_body)
+    if feedback is None:
+        return None
+
+    feedback["captured_at"] = response_sample.get("captured_at")
+    feedback["source_topic"] = "app/get_plan_feedback"
+    return feedback
+
+
+def _extract_cloud_points_feedback(topic_samples: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """Return temporary barrier geometry from cached cloud_points_feedback messages."""
+    device_sample = topic_samples.get(
+        next(
+            (topic for topic in topic_samples if topic.endswith("/device/cloud_points_feedback")),
+            "",
+        ),
+    )
+    if not isinstance(device_sample, dict):
+        return None
+
+    body = device_sample.get("body")
+    if not isinstance(body, str):
+        return None
+
+    feedback = _parse_cloud_points_feedback_body(body)
+    if feedback is None:
+        return None
+
+    feedback["captured_at"] = device_sample.get("captured_at")
+    feedback["source_topic"] = "device/cloud_points_feedback"
+    return feedback
+
+
+def _extract_recharge_feedback(topic_samples: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """Return local recharge path geometry from cached recharge_feedback messages."""
+    device_sample = topic_samples.get(
+        next(
+            (topic for topic in topic_samples if topic.endswith("/device/recharge_feedback")),
+            "",
+        ),
+    )
+    if not isinstance(device_sample, dict):
+        return None
+
+    body = device_sample.get("body")
+    if not isinstance(body, str):
+        return None
+
+    feedback = _parse_recharge_feedback_body(body)
+    if feedback is None:
+        return None
+
+    feedback["captured_at"] = device_sample.get("captured_at")
+    feedback["source_topic"] = "device/recharge_feedback"
+    return feedback
+
+
 def _parse_site_map_response(response_body: str) -> dict[str, Any] | None:
     """Parse a get_map response into a lightweight geometry payload."""
     try:
@@ -911,6 +1131,186 @@ def _parse_site_map_response(response_body: str) -> dict[str, Any] | None:
         "pathways": pathways,
         "electric_fence": electric_fence,
         "charging_points": charging_points,
+    }
+
+
+def _parse_preview_area_path(response_body: str) -> dict[str, Any] | None:
+    """Parse a preview_snowbot_area_path payload into lightweight local geometry."""
+    try:
+        payload = json.loads(response_body)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    points = _extract_xy_points(payload.get("range"))
+    if len(points) < 2:
+        return None
+
+    raw_reference = payload.get("ref")
+    latitude = _coerce_float(raw_reference.get("latitude")) if isinstance(raw_reference, dict) else None
+    longitude = _coerce_float(raw_reference.get("longitude")) if isinstance(raw_reference, dict) else None
+    reference = None
+    if latitude is not None and longitude is not None:
+        reference = {
+            "latitude": round(latitude, 9),
+            "longitude": round(longitude, 9),
+        }
+
+    return {
+        "id": payload.get("id"),
+        "algorithm_type": payload.get("algorithm_type"),
+        "points": points,
+        "reference": reference,
+    }
+
+
+def _parse_plan_feedback_body(response_body: str) -> dict[str, Any] | None:
+    """Parse plan_feedback payloads into lightweight local geometry."""
+    try:
+        payload = json.loads(response_body)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    candidate = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(candidate, dict):
+        return None
+
+    raw_segments = candidate.get("cleanPathProgress")
+    if not isinstance(raw_segments, list):
+        return None
+
+    segments: list[dict[str, Any]] = []
+    for raw_segment in raw_segments:
+        if not isinstance(raw_segment, dict):
+            continue
+
+        points = _extract_xy_points(raw_segment.get("path"))
+        if len(points) < 2:
+            continue
+
+        segments.append(
+            {
+                "id": raw_segment.get("id"),
+                "type": raw_segment.get("type"),
+                "clean_index": raw_segment.get("clean_index"),
+                "clean_times": raw_segment.get("clean_times"),
+                "points": points,
+                "path_slope": raw_segment.get("path_slope")
+                if isinstance(raw_segment.get("path_slope"), list)
+                else [],
+            }
+        )
+
+    actual_clean_area = _coerce_float(candidate.get("actualCleanArea"))
+    finish_clean_area = _coerce_float(candidate.get("finishCleanArea"))
+    total_clean_area = _coerce_float(candidate.get("totalCleanArea"))
+    raw_finish_ids = candidate.get("finishIds")
+    finish_ids: list[dict[str, Any]] = []
+    if isinstance(raw_finish_ids, list):
+        for raw_finish in raw_finish_ids:
+            if not isinstance(raw_finish, dict):
+                continue
+            finish_ids.append(
+                {
+                    "id": raw_finish.get("id"),
+                    "move_type": raw_finish.get("move_type"),
+                    "clean_times": raw_finish.get("clean_times"),
+                }
+            )
+    completed_clean_area = actual_clean_area
+    if completed_clean_area is None:
+        completed_clean_area = finish_clean_area
+    remaining_clean_area = None
+    progress_percent = None
+    if total_clean_area is not None and completed_clean_area is not None:
+        remaining_clean_area = max(total_clean_area - completed_clean_area, 0.0)
+        if total_clean_area > 0:
+            progress_percent = min(
+                100.0,
+                max(0.0, (completed_clean_area / total_clean_area) * 100.0),
+            )
+
+    state = candidate.get("state")
+    return {
+        "plan_id": candidate.get("planId"),
+        "state": state,
+        "plan_running": state == 1,
+        "clean_area_id": candidate.get("cleanAreaId"),
+        "actual_clean_area": actual_clean_area,
+        "finish_clean_area": finish_clean_area,
+        "completed_clean_area": completed_clean_area,
+        "remaining_clean_area": remaining_clean_area,
+        "total_clean_area": total_clean_area,
+        "progress_percent": progress_percent,
+        "left_time": _coerce_float(candidate.get("leftTime")),
+        "total_time": _coerce_float(candidate.get("totalTime")),
+        "duration": _coerce_float(candidate.get("duration")),
+        "finish_ids": finish_ids,
+        "segments": segments,
+    }
+
+
+def _parse_cloud_points_feedback_body(response_body: str) -> dict[str, Any] | None:
+    """Parse cloud_points_feedback payloads into local barrier segments."""
+    try:
+        payload = json.loads(response_body)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    raw_segments = payload.get("tmp_barrier_points")
+    if not isinstance(raw_segments, list):
+        return None
+
+    segments: list[dict[str, Any]] = []
+    for index, raw_segment in enumerate(raw_segments):
+        points = _extract_xy_points(raw_segment)
+        if len(points) < 2:
+            continue
+
+        segments.append(
+            {
+                "id": index,
+                "points": points,
+            }
+        )
+
+    if not segments:
+        return None
+
+    return {
+        "rotate_rad": _coerce_float(payload.get("rotate_rad")),
+        "segments": segments,
+    }
+
+
+def _parse_recharge_feedback_body(response_body: str) -> dict[str, Any] | None:
+    """Parse recharge_feedback payloads into lightweight local geometry."""
+    try:
+        payload = json.loads(response_body)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    points = _extract_xy_points(payload.get("path"))
+    if len(points) < 2:
+        return None
+
+    return {
+        "state": payload.get("state"),
+        "running_state": payload.get("runningState"),
+        "left_time": _coerce_float(payload.get("leftTime")),
+        "total_time": _coerce_float(payload.get("totalTime")),
+        "points": points,
     }
 
 

@@ -139,6 +139,7 @@ def parse_device_message_payload(
         "machine_controller": _as_int(state.get("machine_controller")),
         "self_check_status": _as_int(state.get("self_check_status")),
         "robot_follow_state": _as_bool(state.get("robot_follow_state")),
+        "on_going_planning": _as_bool(state.get("on_going_planning")),
         "planning_paused": _as_bool(state.get("planning_paused")),
         "volume": _as_float(state.get("volume")),
         "sound_enabled": _as_bool(state.get("enable_sound")),
@@ -314,5 +315,18 @@ def _as_bool(value: Any) -> bool | None:
     """Return a bool value when the payload carries one."""
     if isinstance(value, bool):
         return value
+
+    if isinstance(value, int):
+        if value == 0:
+            return False
+        if value == 1:
+            return True
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"0", "false", "off", "no"}:
+            return False
+        if normalized in {"1", "true", "on", "yes"}:
+            return True
 
     return None

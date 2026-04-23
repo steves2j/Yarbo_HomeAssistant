@@ -34,12 +34,14 @@ from .const import (
     build_device_message_request_topic,
     build_get_sound_param_topic,
     build_map_request_topic,
+    build_pause_topic,
     build_recharge_topic,
     build_read_all_plan_topic,
     build_read_global_params_topic,
     build_read_schedules_topic,
     build_read_tow_params_topic,
     build_restart_topic,
+    build_resume_topic,
     build_shutdown_topic,
     build_sound_param_topic,
     build_stop_topic,
@@ -154,15 +156,26 @@ class YarboMqttClient:
         if topic not in self.state.topic_samples:
             return False
 
+        return await self.async_clear_topic_samples_matching({topic})
+
+    async def async_clear_topic_samples_matching(self, topics: set[str]) -> bool:
+        """Clear one or more exact cached topic samples."""
+        if not topics:
+            return False
+
+        matched_topics = {topic for topic in topics if topic in self.state.topic_samples}
+        if not matched_topics:
+            return False
+
         pending_command_topics = [
             pending_topic
             for pending_topic in self.state.pending_command_topics
-            if pending_topic != topic
+            if pending_topic not in matched_topics
         ]
         updated_samples = {
             existing_topic: sample
             for existing_topic, sample in self.state.topic_samples.items()
-            if existing_topic != topic
+            if existing_topic not in matched_topics
         }
         self._apply_state_update(
             {
@@ -184,6 +197,18 @@ class YarboMqttClient:
             notification_count=self.state.notification_count,
         )
         return True
+
+    async def async_clear_topic_samples_by_suffixes(self, suffixes: set[str]) -> bool:
+        """Clear cached topic samples whose topics end with one of the given suffixes."""
+        if not suffixes:
+            return False
+
+        matched_topics = {
+            topic
+            for topic in self.state.topic_samples
+            if any(topic.endswith(suffix) for suffix in suffixes)
+        }
+        return await self.async_clear_topic_samples_matching(matched_topics)
 
     async def async_clear_all_topic_data(self) -> None:
         """Clear all discovered topics and cached samples for this entry."""
@@ -230,13 +255,21 @@ class YarboMqttClient:
         """Publish a bundle of refresh commands for the device."""
         return await self._hass.async_add_executor_job(self._refresh_device_data)
 
-    async def async_start_plan(self, plan_id: str | int) -> str:
+    async def async_start_plan(self, plan_id: str | int, percent: str | int | float = 0) -> str:
         """Publish a command to start the selected plan."""
-        return await self._hass.async_add_executor_job(self._start_plan, plan_id)
+        return await self._hass.async_add_executor_job(self._start_plan, plan_id, percent)
 
     async def async_stop(self) -> str:
         """Publish a command to stop the current action."""
         return await self._hass.async_add_executor_job(self._stop_command)
+
+    async def async_pause(self) -> str:
+        """Publish a command to pause the current plan."""
+        return await self._hass.async_add_executor_job(self._pause_command)
+
+    async def async_resume(self) -> str:
+        """Publish a command to resume the current plan."""
+        return await self._hass.async_add_executor_job(self._resume_command)
 
     async def async_shutdown(self) -> str:
         """Publish a command to shut the device down."""
@@ -470,7 +503,7 @@ class YarboMqttClient:
 
         return published_topics
 
-    def _start_plan(self, plan_id: str | int) -> str:
+    def _start_plan(self, plan_id: str | int, percent: str | int | float = 0) -> str:
         """Publish a command to start a plan."""
         client = self._client
         if client is None:
@@ -480,11 +513,13 @@ class YarboMqttClient:
             raise RuntimeError("MQTT broker is not connected")
 
         resolved_plan_id = _coerce_plan_id(plan_id)
+        resolved_percent = int(round(_coerce_percentage(percent)))
         topic = build_start_plan_topic(self._serial_number)
         payload = _build_start_plan_payload(
             topic_samples=self.state.topic_samples,
             serial_number=self._serial_number,
             plan_id=resolved_plan_id,
+            percent=resolved_percent,
         )
         payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         compressed_payload = zlib.compress(payload_bytes)
@@ -493,9 +528,10 @@ class YarboMqttClient:
             raise RuntimeError(f"MQTT publish failed with code {info.rc}")
 
         _LOGGER.info(
-            "Published compressed start_plan command to %s for plan %s (%s bytes)",
+            "Published compressed start_plan command to %s for plan %s at %s%% (%s bytes)",
             topic,
             resolved_plan_id,
+            resolved_percent,
             len(compressed_payload),
         )
         return topic
@@ -545,6 +581,50 @@ class YarboMqttClient:
 
         _LOGGER.info(
             "Published compressed stop command to %s (%s bytes)",
+            topic,
+            len(compressed_payload),
+        )
+        return topic
+
+    def _pause_command(self) -> str:
+        """Publish a command to pause the current plan."""
+        client = self._client
+        if client is None:
+            raise RuntimeError("MQTT client is not started")
+
+        if self.state.connection_state != STATE_CONNECTED:
+            raise RuntimeError("MQTT broker is not connected")
+
+        topic = build_pause_topic(self._serial_number)
+        compressed_payload = zlib.compress(b"{}")
+        info = client.publish(topic, payload=compressed_payload, qos=0, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with code {info.rc}")
+
+        _LOGGER.info(
+            "Published compressed pause command to %s (%s bytes)",
+            topic,
+            len(compressed_payload),
+        )
+        return topic
+
+    def _resume_command(self) -> str:
+        """Publish a command to resume the current plan."""
+        client = self._client
+        if client is None:
+            raise RuntimeError("MQTT client is not started")
+
+        if self.state.connection_state != STATE_CONNECTED:
+            raise RuntimeError("MQTT broker is not connected")
+
+        topic = build_resume_topic(self._serial_number)
+        compressed_payload = zlib.compress(b"{}")
+        info = client.publish(topic, payload=compressed_payload, qos=0, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with code {info.rc}")
+
+        _LOGGER.info(
+            "Published compressed resume command to %s (%s bytes)",
             topic,
             len(compressed_payload),
         )
@@ -733,8 +813,11 @@ class YarboMqttClient:
         if heartbeat_summary is not None:
             updates["heartbeat_summary"] = heartbeat_summary
 
+        sample_device_summary = _load_device_summary_from_samples(topic_samples)
         if device_summary is None:
-            device_summary = _load_device_summary_from_samples(topic_samples)
+            device_summary = sample_device_summary
+        elif sample_device_summary is not None:
+            device_summary = _merge_summary_update(device_summary, sample_device_summary)
 
         device_summary = _merge_heartbeat_into_summary(device_summary, heartbeat_summary)
         if device_summary is not None:
@@ -1089,6 +1172,7 @@ def _build_start_plan_payload(
     topic_samples: dict[str, dict[str, Any]],
     serial_number: str,
     plan_id: int,
+    percent: int,
 ) -> dict[str, Any]:
     """Build the start_plan payload from cached command samples when available."""
     cached_topic = build_start_plan_topic(serial_number)
@@ -1107,7 +1191,7 @@ def _build_start_plan_payload(
                 payload = decoded_payload
 
     payload["id"] = plan_id
-    payload.setdefault("percent", 0)
+    payload["percent"] = percent
     return payload
 
 

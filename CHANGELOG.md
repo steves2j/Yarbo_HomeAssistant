@@ -6,6 +6,38 @@ This project is still in early development, so the current history is mostly fea
 
 The format loosely follows Keep a Changelog and uses semantic versioning where practical.
 
+## [0.3.0] - 2026-4-23
+
+### Added features
+
+- Start percentage slider under the plan selector on the main overview card
+- Map widgets now render `plan_feedback` overlays with visited vs remaining plan path state
+- Map widgets now show a plan summary pill with:
+  - plan name
+  - progress
+  - remaining area
+  - estimate
+- Map widgets now render `recharge_feedback.path` as a cyan dotted return-to-dock route
+- Map widgets now render `cloud_points_feedback.tmp_barrier_points` as tomato collision/barrier overlays
+
+### Bug fixes
+
+- `start_plan` no longer inherits stale cached progress percentages from prior runs
+- Card plan button state now follows `DeviceMSG` planning flags first, so paused plans correctly switch back to play/resume and stopped plans no longer stay stuck in pause
+- `planning_paused` and related planning flags are now parsed correctly from `0/1` integer payloads
+- `plan_feedback` progress now uses `actualCleanArea / totalCleanArea` instead of the higher stale-completion path
+- `plan_feedback` estimate times now treat `leftTime` and `totalTime` as seconds instead of incorrectly inflating them into hours
+- Starting a new plan now clears stale `recharge_feedback` so the previous dock-return path does not leak into the next session
+- The map now uses fixed GPS offset correction values instead of the previous browser-learned auto-calibration routine
+- Battery recharge action is now disabled while charging without greying out the battery icon
+- Battery tooltip is removed when recharge is disabled because the unit is already charging
+- Boundary plan lines now stay in the green color family for both pending and visited states
+
+### Internal changes
+
+- Frontend cache-busting remains based on `st_mtime_ns` in `panel.py` to reduce stale-module issues on Home Assistant `2026.4.x`
+- Fixed GPS offset values are currently duplicated in both map widget files and must be updated together if recalibrated
+
 ## [0.2.0] - 2026-4-22
 
 ### Changed

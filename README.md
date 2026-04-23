@@ -31,24 +31,33 @@ See [CHANGELOG.md](CHANGELOG.md) for feature history.
 - Merged `device/DeviceMSG` document to capture fields that appear across multiple messages
 - Diagnostic sensor entities for MQTT/runtime state
 - Device tracker entity from GPS / RTK data
-- Overview dashboard card with one widget per configured Yarbo device
+- Overview dashboard card with one widget per selected Yarbo device
 - Integrated local map widget inside the overview card with:
   - decoded `get_map` geometry rendering
-  - live Yarbo footprint and heading
-  - dock geometry rendering
+  - live Yarbo footprint and heading with fixed GPS offset correction
+  - dock geometry and docking guard square rendering
+  - `plan_feedback` overlay rendering with visited vs remaining plan path state
+  - plan summary pill with plan name, progress, remaining area, and estimate
+  - `recharge_feedback` return-to-dock route rendering
+  - `cloud_points_feedback` collision/barrier rendering
   - follow mode, zoom, pan, and breadcrumb trail controls
-  - in-map GPS/heading overlay and calibration warning overlay
+  - in-map GPS/heading overlay
   - variable trail width based on mower motor state
   - magenta reverse trail segments
 - Plan dropdown populated from `read_all_plan`
+- Start percentage slider under the plan selector
 - Device commands from the overview card:
   - start plan
+  - pause
+  - resume
   - stop
   - recharge
   - shutdown
   - restart
   - volume update
   - bulk refresh
+- Standalone development map card for protocol exploration:
+  - `custom:s2jyarbo-map-card`
 - Auto-refresh of stale device data when `Last Updated` is missing or older than one hour
 
 ## Project layout
@@ -207,7 +216,6 @@ Use it in Lovelace as:
 
 ```yaml
 type: custom:s2jyarbo-overview-card
-entity_id: sensor.brutus_mqtt_connection
 ```
 
 The card renders one widget for the selected S2JYarbo device and includes:
@@ -217,12 +225,28 @@ The card renders one widget for the selected S2JYarbo device and includes:
 - battery and recharge action
 - integrated local map with decoded site geometry, follow mode, zoom, and breadcrumbs
   - GPS coordinates and heading shown in-map
-  - calibration warning shown in-map when calibration is missing
+  - fixed GPS offset correction applied to the live Yarbo position
   - trail width changes between transit and 550 mm cutting width based on mower motor state
   - magenta trail segments indicate reverse movement
+  - `plan_feedback` overlays:
+    - visited vs remaining plan path rendering
+    - right-side plan summary pill
+  - `recharge_feedback` shown as a cyan dotted return-to-dock route
+  - `cloud_points_feedback` shown as tomato collision/barrier strips
 - plan selection
-- start / stop controls
+- start percentage slider
+- start / pause / resume / stop controls
 - advanced controls for shutdown, restart, volume, and Wi-Fi details
+
+### Standalone development map card
+
+There is also a separate standalone development card for protocol exploration:
+
+```yaml
+type: custom:s2jyarbo-map-card
+```
+
+It is intended for testing new MQTT-derived overlays before they are merged into the main overview widget.
 
 ## MQTT behavior
 
@@ -310,12 +334,24 @@ This section is intended as handoff context for a future coding agent continuing
   - an embedded local-map widget fed from the same dashboard entry data
   - cached command response data
 - The old native HA/OpenStreetMap path is no longer the active map inside the overview card; the overview now mounts the embedded local-map widget from `s2jyarbo-map-card.js`
-- `s2jyarbo-map-card.js` is now an internal widget module used by the overview card, not a user-facing standalone custom card registration
-- The map widget persists per-device zoom scale and dock-derived GPS calibration in browser storage
+- `s2jyarbo-map-card.js` is the shared embedded live map widget used by the overview card
+- `s2jyarbo-map-dev-card.js` registers the standalone development card as `custom:s2jyarbo-map-card`
+- The map widgets persist per-device zoom scale in browser storage
+- GPS position correction is currently a fixed hard-coded offset, not a learned dock-calibration routine
 - Trail rendering semantics are:
   - `2px` width for transit / mower off
   - `0.55m` width for cutting / mower on
   - magenta segments indicate reverse travel
+- `plan_feedback` overlays are reconstructed from:
+  - `cleanPathProgress`
+  - `finishIds`
+  - `clean_index`
+- `recharge_feedback.path` is rendered as a cyan dotted route
+- `cloud_points_feedback.tmp_barrier_points` is rendered as tomato collision/barrier strips
+- The overview plan action button state should follow `DeviceMSG` planning flags first:
+  - `on_going_planning`
+  - `planning_paused`
+- `planning_paused` and similar flags can arrive as `0/1` integers, not only booleans
 - The mower-head state is inferred from `mower_head_info03/04` blade speed and RPM values parsed into the summary/status entity
 - Frontend changes usually require a hard refresh because Home Assistant caches panel/card JS aggressively
 - Some features intentionally rely on cached command payloads so they can mirror what the mobile app has already been seen sending
@@ -329,6 +365,7 @@ This section is intended as handoff context for a future coding agent continuing
 - The overview card has a lot of UI state and behavior in a single file; future work may benefit from splitting it into smaller helpers
 - The embedded widget path has its own `shadowRoot`; if map CSS appears to be ignored inside the overview card, verify the embedded path is loading the full shared stylesheet, not a minimal stub
 - Overlay positioning on the map is sensitive to both SVG letterboxing and internal drawing padding; if map labels drift into the black border again, inspect `_updateCanvasInsets()` first
+- The fixed GPS offset values currently live in both map widget files; if they need changing, update both copies together
 
 ### Safe next-step priorities
 
@@ -338,6 +375,7 @@ This section is intended as handoff context for a future coding agent continuing
 - Consider a bounded per-topic history instead of only latest-sample storage when protocol discovery is the goal
 - Reduce frontend complexity by factoring repeated control/button/map logic into smaller methods or modules
 - Add tests or debug instrumentation around the embedded map widget lifecycle, especially `entryData` ingestion and cached frontend module updates
+- Move the fixed GPS offset into a configurable or backend-managed setting if per-device calibration becomes necessary
 
 ### Working rules for a future agent
 
@@ -347,3 +385,4 @@ This section is intended as handoff context for a future coding agent continuing
 - When touching the local map widget, verify both the standalone render path and the embedded overview path, because they share logic but have different `shadowRoot` structure
 - When changing button actions, keep Home Assistant auth-aware API calls through the existing backend views rather than raw browser fetches
 - If investigating missing `app/*` topics, verify the broker delivery path before changing the subscription code
+- If changing GPS correction behavior, update both `s2jyarbo-map-card.js` and `s2jyarbo-map-dev-card.js` so the dev card and main card stay aligned
