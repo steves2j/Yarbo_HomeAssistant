@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import json
-import logging
-import ssl
 import gzip
 import hashlib
+import json
+import logging
 import re
+import ssl
+import zlib
 from dataclasses import dataclass, field
 from typing import Any
-import zlib
 
 import paho.mqtt.client as mqtt
 from homeassistant.components import persistent_notification
@@ -26,26 +26,30 @@ from .const import (
     CONF_TLS,
     DEFAULT_TOPIC_PREFIX,
     DOMAIN,
-    build_connect_wifi_name_topic,
     STATE_CONNECTED,
     STATE_CONNECTING,
     STATE_CONNECTION_FAILED,
     STATE_DISCONNECTED,
+    build_connect_wifi_name_topic,
+    build_delete_nogozone_topic,
+    build_delete_pathway_topic,
     build_device_message_request_topic,
     build_get_sound_param_topic,
     build_map_request_topic,
     build_pause_topic,
-    build_recharge_topic,
     build_read_all_plan_topic,
     build_read_global_params_topic,
     build_read_schedules_topic,
     build_read_tow_params_topic,
+    build_recharge_topic,
     build_restart_topic,
     build_resume_topic,
+    build_save_nogozone_topic,
+    build_save_pathway_topic,
     build_shutdown_topic,
     build_sound_param_topic,
-    build_stop_topic,
     build_start_plan_topic,
+    build_stop_topic,
     build_subscription_topic,
 )
 from .device_data import (
@@ -255,11 +259,15 @@ class YarboMqttClient:
         """Publish a bundle of refresh commands for the device."""
         return await self._hass.async_add_executor_job(self._refresh_device_data)
 
-    async def async_start_plan(self, plan_id: str | int, percent: str | int | float = 0) -> str:
+    async def async_start_plan(
+        self,
+        plan_id: str | int,
+        percent: str | int | float = 0,
+    ) -> str:
         """Publish a command to start the selected plan."""
         return await self._hass.async_add_executor_job(self._start_plan, plan_id, percent)
 
-    async def async_stop(self) -> str:
+    async def async_stop_command(self) -> str:
         """Publish a command to stop the current action."""
         return await self._hass.async_add_executor_job(self._stop_command)
 
@@ -286,6 +294,22 @@ class YarboMqttClient:
     async def async_recharge(self) -> str:
         """Publish a command to send the device back to recharge."""
         return await self._hass.async_add_executor_job(self._recharge)
+
+    async def async_save_pathway(self, payload: dict[str, Any]) -> str:
+        """Publish a command to save a pathway."""
+        return await self._hass.async_add_executor_job(self._save_pathway, payload)
+
+    async def async_delete_pathway(self, payload: dict[str, Any]) -> str:
+        """Publish a command to delete a pathway."""
+        return await self._hass.async_add_executor_job(self._delete_pathway, payload)
+
+    async def async_save_nogozone(self, payload: dict[str, Any]) -> str:
+        """Publish a command to save a no-go zone."""
+        return await self._hass.async_add_executor_job(self._save_nogozone, payload)
+
+    async def async_delete_nogozone(self, payload: dict[str, Any]) -> str:
+        """Publish a command to delete a no-go zone."""
+        return await self._hass.async_add_executor_job(self._delete_nogozone, payload)
 
     async def _async_save_store(
         self,
@@ -559,6 +583,127 @@ class YarboMqttClient:
         _LOGGER.info(
             "Published compressed recharge command to %s (%s bytes)",
             topic,
+            len(compressed_payload),
+        )
+        return topic
+
+    def _save_pathway(self, payload: dict[str, Any]) -> str:
+        """Publish a command to save a pathway."""
+        client = self._client
+        if client is None:
+            raise RuntimeError("MQTT client is not started")
+
+        if self.state.connection_state != STATE_CONNECTED:
+            raise RuntimeError("MQTT broker is not connected")
+
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+
+        normalized_payload = dict(payload)
+        normalized_payload.setdefault("connectids", [])
+        normalized_payload.setdefault("leaf_piles", [])
+        normalized_payload.setdefault("snowPiles", [])
+        normalized_payload.setdefault("trimming_edges", [])
+
+        topic = build_save_pathway_topic(self._serial_number)
+        payload_bytes = json.dumps(normalized_payload, separators=(",", ":")).encode("utf-8")
+        compressed_payload = zlib.compress(payload_bytes)
+        info = client.publish(topic, payload=compressed_payload, qos=0, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with code {info.rc}")
+
+        _LOGGER.info(
+            "Published save_pathway command to %s with %s range points (%s bytes)",
+            topic,
+            len(normalized_payload.get("range") or []),
+            len(compressed_payload),
+        )
+        return topic
+
+    def _delete_pathway(self, payload: dict[str, Any]) -> str:
+        """Publish a command to delete a pathway."""
+        client = self._client
+        if client is None:
+            raise RuntimeError("MQTT client is not started")
+
+        if self.state.connection_state != STATE_CONNECTED:
+            raise RuntimeError("MQTT broker is not connected")
+
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+
+        normalized_payload = dict(payload)
+        topic = build_delete_pathway_topic(self._serial_number)
+        payload_bytes = json.dumps(normalized_payload, separators=(",", ":")).encode("utf-8")
+        compressed_payload = zlib.compress(payload_bytes)
+        info = client.publish(topic, payload=compressed_payload, qos=0, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with code {info.rc}")
+
+        _LOGGER.info(
+            "Published del_pathway command to %s for pathway %s (%s bytes)",
+            topic,
+            normalized_payload.get("id", normalized_payload.get("name", "unknown")),
+            len(compressed_payload),
+        )
+        return topic
+
+    def _save_nogozone(self, payload: dict[str, Any]) -> str:
+        """Publish a command to save a no-go zone."""
+        client = self._client
+        if client is None:
+            raise RuntimeError("MQTT client is not started")
+
+        if self.state.connection_state != STATE_CONNECTED:
+            raise RuntimeError("MQTT broker is not connected")
+
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+
+        normalized_payload = dict(payload)
+        normalized_payload.setdefault("type", 0)
+        normalized_payload.setdefault("enable", True)
+        normalized_payload.setdefault("trimming_edges", [])
+
+        topic = build_save_nogozone_topic(self._serial_number)
+        payload_bytes = json.dumps(normalized_payload, separators=(",", ":")).encode("utf-8")
+        compressed_payload = zlib.compress(payload_bytes)
+        info = client.publish(topic, payload=compressed_payload, qos=0, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with code {info.rc}")
+
+        _LOGGER.info(
+            "Published save_nogozone command to %s with %s range points (%s bytes)",
+            topic,
+            len(normalized_payload.get("range") or []),
+            len(compressed_payload),
+        )
+        return topic
+
+    def _delete_nogozone(self, payload: dict[str, Any]) -> str:
+        """Publish a command to delete a no-go zone."""
+        client = self._client
+        if client is None:
+            raise RuntimeError("MQTT client is not started")
+
+        if self.state.connection_state != STATE_CONNECTED:
+            raise RuntimeError("MQTT broker is not connected")
+
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+
+        normalized_payload = dict(payload)
+        topic = build_delete_nogozone_topic(self._serial_number)
+        payload_bytes = json.dumps(normalized_payload, separators=(",", ":")).encode("utf-8")
+        compressed_payload = zlib.compress(payload_bytes)
+        info = client.publish(topic, payload=compressed_payload, qos=0, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with code {info.rc}")
+
+        _LOGGER.info(
+            "Published del_nogozone command to %s for no-go zone %s (%s bytes)",
+            topic,
+            normalized_payload.get("id", "unknown"),
             len(compressed_payload),
         )
         return topic
@@ -1104,9 +1249,8 @@ def _build_topic_sample(
         "metadata": packet_metadata or {},
     }
 
-
 def _is_command_request_topic(topic: str) -> bool:
-    """Return True for app/get_* and app/read_* command topics."""
+    """Return True for app commands whose feedback should be paired."""
     if "/app/" not in topic:
         return False
 

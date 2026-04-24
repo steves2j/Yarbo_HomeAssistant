@@ -43,3 +43,5 @@ __pycache__/
 .vscode/
 *.swp
 *.swo
+
+custom_components/s2jyarbo/Yarbo_HomeAssistant.code-workspace

@@ -110,6 +110,26 @@ def build_recharge_topic(serial_number: str) -> str:
     return _build_app_topic(serial_number, "cmd_recharge")
 
 
+def build_save_pathway_topic(serial_number: str) -> str:
+    """Build the MQTT topic used to save a pathway."""
+    return _build_app_topic(serial_number, "save_pathway")
+
+
+def build_delete_pathway_topic(serial_number: str) -> str:
+    """Build the MQTT topic used to delete a pathway."""
+    return _build_app_topic(serial_number, "del_pathway")
+
+
+def build_save_nogozone_topic(serial_number: str) -> str:
+    """Build the MQTT topic used to save a no-go zone."""
+    return _build_app_topic(serial_number, "save_nogozone")
+
+
+def build_delete_nogozone_topic(serial_number: str) -> str:
+    """Build the MQTT topic used to delete a no-go zone."""
+    return _build_app_topic(serial_number, "del_nogozone")
+
+
 CONFIG_KEYS = (
     CONF_HOST,
     CONF_PORT,

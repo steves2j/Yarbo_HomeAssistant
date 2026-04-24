@@ -5,9 +5,9 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import zlib
 from pathlib import Path
 from typing import Any
-import zlib
 
 from aiohttp import web
 from homeassistant.components import frontend, panel_custom
@@ -20,6 +20,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .device_data import is_device_message_topic
@@ -40,10 +42,18 @@ SHUTDOWN_API_URL = "/api/s2jyarbo/shutdown"
 RESTART_API_URL = "/api/s2jyarbo/restart"
 SET_VOLUME_API_URL = "/api/s2jyarbo/set_volume"
 RECHARGE_API_URL = "/api/s2jyarbo/recharge"
+SAVE_PATHWAY_API_URL = "/api/s2jyarbo/save_pathway"
+DELETE_PATHWAY_API_URL = "/api/s2jyarbo/delete_pathway"
+SAVE_NOGOZONE_API_URL = "/api/s2jyarbo/save_nogozone"
+DELETE_NOGOZONE_API_URL = "/api/s2jyarbo/delete_nogozone"
+EDIT_ACKNOWLEDGEMENT_API_URL = "/api/s2jyarbo/edit_acknowledgement"
 PANEL_MODULE_NAME = "s2jyarbo-topics-panel"
 OVERVIEW_CARD_MODULE_NAME = "s2jyarbo-overview-card"
 MAP_CARD_MODULE_NAME = "s2jyarbo-map-card"
 DEV_MAP_CARD_MODULE_NAME = "s2jyarbo-map-dev-card"
+STORAGE_VERSION = 1
+EDIT_ACKNOWLEDGEMENT_STORAGE_KEY = f"{DOMAIN}_edit_acknowledgements"
+EDIT_ACKNOWLEDGEMENT_ID = "dev_map_edit_warning_v1"
 
 
 async def async_register_panel(hass: HomeAssistant) -> None:
@@ -73,6 +83,11 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     hass.http.register_view(YarboRestartView(hass))
     hass.http.register_view(YarboSetVolumeView(hass))
     hass.http.register_view(YarboRechargeView(hass))
+    hass.http.register_view(YarboSavePathwayView(hass))
+    hass.http.register_view(YarboDeletePathwayView(hass))
+    hass.http.register_view(YarboSaveNoGoZoneView(hass))
+    hass.http.register_view(YarboDeleteNoGoZoneView(hass))
+    hass.http.register_view(YarboEditAcknowledgementView(hass))
     frontend.add_extra_js_url(
         hass,
         f"{PANEL_STATIC_URL}/{MAP_CARD_MODULE_NAME}.js?v={map_module_version}",
@@ -561,7 +576,7 @@ class YarboStopView(HomeAssistantView):
             return web.Response(status=404, text="S2JYarbo entry not found")
 
         try:
-            topic = await runtime.async_stop()
+            topic = await runtime.async_stop_command()
         except RuntimeError as err:
             return web.Response(status=409, text=str(err))
 
@@ -712,6 +727,325 @@ class YarboSetVolumeView(HomeAssistantView):
                 "volume": volume,
             }
         )
+
+
+class YarboSavePathwayView(HomeAssistantView):
+    """Handle widget actions for saving a pathway."""
+
+    url = SAVE_PATHWAY_API_URL
+    name = "api:s2jyarbo:save_pathway"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the save_pathway action API view."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Publish a save_pathway command for one Yarbo device."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+        command_payload = payload.get("payload")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+        if not isinstance(command_payload, dict):
+            return web.Response(status=400, text="payload is required")
+
+        entry = next(
+            (
+                config_entry
+                for config_entry in self._hass.config_entries.async_entries(DOMAIN)
+                if config_entry.entry_id == entry_id
+            ),
+            None,
+        )
+        runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
+
+        if entry is None or runtime is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            topic = await runtime.async_save_pathway(command_payload)
+        except ValueError as err:
+            return web.Response(status=400, text=str(err))
+        except RuntimeError as err:
+            return web.Response(status=409, text=str(err))
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "topic": topic,
+            }
+        )
+
+
+class YarboDeletePathwayView(HomeAssistantView):
+    """Handle widget actions for deleting a pathway."""
+
+    url = DELETE_PATHWAY_API_URL
+    name = "api:s2jyarbo:delete_pathway"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the delete_pathway action API view."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Publish a del_pathway command for one Yarbo device."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+        command_payload = payload.get("payload")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+        if not isinstance(command_payload, dict):
+            return web.Response(status=400, text="payload is required")
+
+        entry = next(
+            (
+                config_entry
+                for config_entry in self._hass.config_entries.async_entries(DOMAIN)
+                if config_entry.entry_id == entry_id
+            ),
+            None,
+        )
+        runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
+
+        if entry is None or runtime is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            topic = await runtime.async_delete_pathway(command_payload)
+        except ValueError as err:
+            return web.Response(status=400, text=str(err))
+        except RuntimeError as err:
+            return web.Response(status=409, text=str(err))
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "topic": topic,
+            }
+        )
+
+
+class YarboSaveNoGoZoneView(HomeAssistantView):
+    """Handle widget actions for saving a no-go zone."""
+
+    url = SAVE_NOGOZONE_API_URL
+    name = "api:s2jyarbo:save_nogozone"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the save_nogozone action API view."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Publish a save_nogozone command for one Yarbo device."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+        command_payload = payload.get("payload")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+        if not isinstance(command_payload, dict):
+            return web.Response(status=400, text="payload is required")
+
+        entry = next(
+            (
+                config_entry
+                for config_entry in self._hass.config_entries.async_entries(DOMAIN)
+                if config_entry.entry_id == entry_id
+            ),
+            None,
+        )
+        runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
+
+        if entry is None or runtime is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            topic = await runtime.async_save_nogozone(command_payload)
+        except ValueError as err:
+            return web.Response(status=400, text=str(err))
+        except RuntimeError as err:
+            return web.Response(status=409, text=str(err))
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "topic": topic,
+            }
+        )
+
+
+class YarboDeleteNoGoZoneView(HomeAssistantView):
+    """Handle widget actions for deleting a no-go zone."""
+
+    url = DELETE_NOGOZONE_API_URL
+    name = "api:s2jyarbo:delete_nogozone"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the delete_nogozone action API view."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Publish a del_nogozone command for one Yarbo device."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+        command_payload = payload.get("payload")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+        if not isinstance(command_payload, dict):
+            return web.Response(status=400, text="payload is required")
+
+        entry = next(
+            (
+                config_entry
+                for config_entry in self._hass.config_entries.async_entries(DOMAIN)
+                if config_entry.entry_id == entry_id
+            ),
+            None,
+        )
+        runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
+
+        if entry is None or runtime is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            topic = await runtime.async_delete_nogozone(command_payload)
+        except ValueError as err:
+            return web.Response(status=400, text=str(err))
+        except RuntimeError as err:
+            return web.Response(status=409, text=str(err))
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "topic": topic,
+            }
+        )
+
+
+class YarboEditAcknowledgementView(HomeAssistantView):
+    """Persist the map edit warning acknowledgement in Home Assistant."""
+
+    url = EDIT_ACKNOWLEDGEMENT_API_URL
+    name = "api:s2jyarbo:edit_acknowledgement"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the edit acknowledgement API view."""
+        self._hass = hass
+        self._store = Store[dict[str, Any]](
+            hass,
+            STORAGE_VERSION,
+            EDIT_ACKNOWLEDGEMENT_STORAGE_KEY,
+        )
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return stored edit acknowledgement state for one Yarbo entry."""
+        entry_id = request.query.get("entry_id")
+        if not isinstance(entry_id, str) or not entry_id:
+            return web.Response(status=400, text="entry_id is required")
+
+        entry = _find_config_entry(self._hass, entry_id)
+        if entry is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        acknowledgement = await self._async_get_acknowledgement(entry.entry_id)
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "acknowledgement_id": EDIT_ACKNOWLEDGEMENT_ID,
+                "acknowledged": acknowledgement is not None,
+                "acknowledged_at": (
+                    acknowledgement.get("acknowledged_at")
+                    if acknowledgement
+                    else None
+                ),
+                "acknowledged_by": (
+                    acknowledgement.get("acknowledged_by")
+                    if acknowledgement
+                    else None
+                ),
+            }
+        )
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Store edit acknowledgement state for one Yarbo entry."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+        acknowledged = payload.get("acknowledged")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+        if acknowledged is not True:
+            return web.Response(status=400, text="acknowledged=true is required")
+
+        entry = _find_config_entry(self._hass, entry_id)
+        if entry is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        stored = await self._store.async_load() or {}
+        entries = stored.get("entries")
+        if not isinstance(entries, dict):
+            entries = {}
+
+        acknowledgement = {
+            "acknowledgement_id": EDIT_ACKNOWLEDGEMENT_ID,
+            "acknowledged": True,
+            "acknowledged_at": dt_util.utcnow().isoformat(),
+            "acknowledged_by": "frontend",
+        }
+        entry_acknowledgements = entries.get(entry.entry_id)
+        if not isinstance(entry_acknowledgements, dict):
+            entry_acknowledgements = {}
+        entry_acknowledgements[EDIT_ACKNOWLEDGEMENT_ID] = acknowledgement
+        entries[entry.entry_id] = entry_acknowledgements
+        stored["entries"] = entries
+        await self._store.async_save(stored)
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                **acknowledgement,
+            }
+        )
+
+    async def _async_get_acknowledgement(self, entry_id: str) -> dict[str, Any] | None:
+        """Return the stored acknowledgement for an entry, if present."""
+        stored = await self._store.async_load() or {}
+        entries = stored.get("entries")
+        if not isinstance(entries, dict):
+            return None
+
+        entry_acknowledgements = entries.get(entry_id)
+        if not isinstance(entry_acknowledgements, dict):
+            return None
+
+        acknowledgement = entry_acknowledgements.get(EDIT_ACKNOWLEDGEMENT_ID)
+        if (
+            not isinstance(acknowledgement, dict)
+            or acknowledgement.get("acknowledged") is not True
+        ):
+            return None
+
+        return acknowledgement
+
+
+def _find_config_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry | None:
+    """Return a S2JYarbo config entry by id."""
+    return next(
+        (
+            config_entry
+            for config_entry in hass.config_entries.async_entries(DOMAIN)
+            if config_entry.entry_id == entry_id
+        ),
+        None,
+    )
 
 
 def _serialize_entry(
@@ -1337,6 +1671,8 @@ def _extract_map_shapes(
             {
                 "id": candidate.get("id"),
                 "name": candidate.get("name") or "",
+                "type": candidate.get("type"),
+                "enable": candidate.get("enable"),
                 "points": points,
             }
         )

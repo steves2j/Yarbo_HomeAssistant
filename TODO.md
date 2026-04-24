@@ -25,3 +25,4 @@ Project backlog and near-term ideas for the Yarbo Home Assistant integration.
 - HA events, triggers, and alarm tie-ins
   - Add Home Assistant event support for Yarbo actions and state transitions.
   - Make Yarbo state usable in automations, triggers, and alarm flows.
+- Make internationalizable.

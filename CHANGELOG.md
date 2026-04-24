@@ -6,6 +6,28 @@ This project is still in early development, so the current history is mostly fea
 
 The format loosely follows Keep a Changelog and uses semantic versioning where practical.
 
+## [0.4.0] - 2026-04-24
+
+### Added features
+
+- Added Home Assistant-persisted edit warning acknowledgement before map editing can be used
+- Added pathway and no-go zone editing from the main map, including:
+  - point insert, drag, and delete
+  - whole-object move with Ctrl-drag
+  - object rotation with Shift-scroll
+  - no-go zone resize with Ctrl-scroll
+  - save and delete commands through Home Assistant API views
+- Added no-go zone edit context actions:
+  - `ToCircle`
+  - `addSquare`
+  - `addCircle`
+- Added unsaved-change protection for active map edits, including internal Home Assistant dashboard navigation
+- Added compact MDI icon controls for the main map toolbar and edit toolbar
+
+### Changed
+
+- Delete confirmation dialogs now use object-specific wording for pathways and no-go zones
+
 ## [0.3.0] - 2026-4-23
 
 ### Added features

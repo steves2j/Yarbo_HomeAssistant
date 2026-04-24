@@ -2,10 +2,11 @@
 
 Home Assistant custom integration workspace for Yarbo devices using MQTT, published under the `s2jyarbo` domain to avoid conflicts with other Yarbo integrations.
 
+This integration allows a user to view the current map of a YArbo, start and stop plans, Edit and Add No Go Zones and Pathways. More to come. 
+
 This repository contains:
 
 - the `s2jyarbo` custom integration in `custom_components/s2jyarbo`
-- a local Docker-based Home Assistant development instance
 - a custom S2JYarbo topics sidebar panel
 - a custom S2JYarbo overview card for the Home Assistant dashboard
 
@@ -44,6 +45,10 @@ See [CHANGELOG.md](CHANGELOG.md) for feature history.
   - in-map GPS/heading overlay
   - variable trail width based on mower motor state
   - magenta reverse trail segments
+  - edit mode for pathways and no-go zones after a stored Home Assistant acknowledgement
+  - pathway/no-go zone point editing, whole-object move, rotate, and no-go zone sizing controls
+  - no-go zone preset/context actions for circle, 1 m square, and 1 m 8-point circle generation
+  - unsaved-change protection while editing, including Home Assistant dashboard navigation
 - Plan dropdown populated from `read_all_plan`
 - Start percentage slider under the plan selector
 - Device commands from the overview card:
@@ -56,7 +61,7 @@ See [CHANGELOG.md](CHANGELOG.md) for feature history.
   - restart
   - volume update
   - bulk refresh
-- Standalone development map card for protocol exploration:
+- Standalone development map card for protocol exploration and edit staging:
   - `custom:s2jyarbo-map-card`
 - Auto-refresh of stale device data when `Last Updated` is missing or older than one hour
 
@@ -233,6 +238,14 @@ The card renders one widget for the selected S2JYarbo device and includes:
     - right-side plan summary pill
   - `recharge_feedback` shown as a cyan dotted return-to-dock route
   - `cloud_points_feedback` shown as tomato collision/barrier strips
+  - edit mode for pathways and no-go zones:
+    - a full-browser warning acknowledgement must be accepted once and is stored in Home Assistant
+    - point insert, drag, and delete
+    - Ctrl-drag whole-object move
+    - Shift-scroll rotate
+    - Ctrl-scroll no-go zone resize
+    - no-go zone context menu actions for `ToCircle`, `addSquare`, and `addCircle`
+    - unsaved-change prompts with discard, cancel, and save flows
 - plan selection
 - start percentage slider
 - start / pause / resume / stop controls
@@ -240,13 +253,13 @@ The card renders one widget for the selected S2JYarbo device and includes:
 
 ### Standalone development map card
 
-There is also a separate standalone development card for protocol exploration:
+There is also a separate standalone development card for protocol exploration and edit staging:
 
 ```yaml
 type: custom:s2jyarbo-map-card
 ```
 
-It is intended for testing new MQTT-derived overlays before they are merged into the main overview widget.
+It mirrors the shared map/editor behavior closely enough to test new MQTT-derived overlays and edit workflows before they are merged into the main overview widget.
 
 ## MQTT behavior
 
@@ -334,9 +347,17 @@ This section is intended as handoff context for a future coding agent continuing
   - an embedded local-map widget fed from the same dashboard entry data
   - cached command response data
 - The old native HA/OpenStreetMap path is no longer the active map inside the overview card; the overview now mounts the embedded local-map widget from `s2jyarbo-map-card.js`
-- `s2jyarbo-map-card.js` is the shared embedded live map widget used by the overview card
-- `s2jyarbo-map-dev-card.js` registers the standalone development card as `custom:s2jyarbo-map-card`
+- `s2jyarbo-map-card.js` is the shared embedded live map widget used by the overview card and now includes the pathway/no-go zone editor
+- `s2jyarbo-map-dev-card.js` registers the standalone development card as `custom:s2jyarbo-map-card` and should stay aligned with the main widget when map/editor behavior changes
 - The map widgets persist per-device zoom scale in browser storage
+- Map editing uses backend API views in `panel.py` for `save_pathway`, `delete_pathway`, `save_nogozone`, `delete_nogozone`, and `edit_acknowledgement`
+- The edit warning acknowledgement is persisted in Home Assistant storage under `s2jyarbo_edit_acknowledgements`; the acknowledgement id currently remains `dev_map_edit_warning_v1` for continuity with earlier DEV-card testing
+- Edit mode disables live refresh while active and uses an unsaved-change guard for cross/cancel, End Edit, browser unload, dashboard link clicks, and Home Assistant SPA route changes
+- Current editor controls are:
+  - Ctrl-drag to move a selected pathway/no-go zone or active draft
+  - Shift-scroll to rotate
+  - Ctrl-scroll to resize no-go zones
+  - right-click no-go zone actions for `ToCircle`, `addSquare`, and `addCircle`
 - GPS position correction is currently a fixed hard-coded offset, not a learned dock-calibration routine
 - Trail rendering semantics are:
   - `2px` width for transit / mower off
@@ -385,4 +406,4 @@ This section is intended as handoff context for a future coding agent continuing
 - When touching the local map widget, verify both the standalone render path and the embedded overview path, because they share logic but have different `shadowRoot` structure
 - When changing button actions, keep Home Assistant auth-aware API calls through the existing backend views rather than raw browser fetches
 - If investigating missing `app/*` topics, verify the broker delivery path before changing the subscription code
-- If changing GPS correction behavior, update both `s2jyarbo-map-card.js` and `s2jyarbo-map-dev-card.js` so the dev card and main card stay aligned
+- If changing map rendering, editor behavior, or GPS correction behavior, update both `s2jyarbo-map-card.js` and `s2jyarbo-map-dev-card.js` so the dev card and main card stay aligned
