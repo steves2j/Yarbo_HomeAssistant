@@ -43,7 +43,10 @@ RESTART_API_URL = "/api/s2jyarbo/restart"
 SET_VOLUME_API_URL = "/api/s2jyarbo/set_volume"
 RECHARGE_API_URL = "/api/s2jyarbo/recharge"
 SAVE_PATHWAY_API_URL = "/api/s2jyarbo/save_pathway"
+SAVE_SIDEWALK_API_URL = "/api/s2jyarbo/save_sidewalk"
 DELETE_PATHWAY_API_URL = "/api/s2jyarbo/delete_pathway"
+DELETE_SIDEWALK_API_URL = "/api/s2jyarbo/delete_sidewalk"
+SAVE_MEMORY_PATH_SETTINGS_API_URL = "/api/s2jyarbo/save_memory_path_settings"
 SAVE_NOGOZONE_API_URL = "/api/s2jyarbo/save_nogozone"
 DELETE_NOGOZONE_API_URL = "/api/s2jyarbo/delete_nogozone"
 EDIT_ACKNOWLEDGEMENT_API_URL = "/api/s2jyarbo/edit_acknowledgement"
@@ -84,7 +87,10 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     hass.http.register_view(YarboSetVolumeView(hass))
     hass.http.register_view(YarboRechargeView(hass))
     hass.http.register_view(YarboSavePathwayView(hass))
+    hass.http.register_view(YarboSaveSidewalkView(hass))
     hass.http.register_view(YarboDeletePathwayView(hass))
+    hass.http.register_view(YarboDeleteSidewalkView(hass))
+    hass.http.register_view(YarboSaveMemoryPathSettingsView(hass))
     hass.http.register_view(YarboSaveNoGoZoneView(hass))
     hass.http.register_view(YarboDeleteNoGoZoneView(hass))
     hass.http.register_view(YarboEditAcknowledgementView(hass))
@@ -779,6 +785,56 @@ class YarboSavePathwayView(HomeAssistantView):
         )
 
 
+class YarboSaveSidewalkView(HomeAssistantView):
+    """Handle widget actions for saving a memory path."""
+
+    url = SAVE_SIDEWALK_API_URL
+    name = "api:s2jyarbo:save_sidewalk"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the save_sidewalk action API view."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Publish a save_sidewalk command for one Yarbo device."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+        command_payload = payload.get("payload")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+        if not isinstance(command_payload, dict):
+            return web.Response(status=400, text="payload is required")
+
+        entry = next(
+            (
+                config_entry
+                for config_entry in self._hass.config_entries.async_entries(DOMAIN)
+                if config_entry.entry_id == entry_id
+            ),
+            None,
+        )
+        runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
+
+        if entry is None or runtime is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            topic = await runtime.async_save_sidewalk(command_payload)
+        except ValueError as err:
+            return web.Response(status=400, text=str(err))
+        except RuntimeError as err:
+            return web.Response(status=409, text=str(err))
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "topic": topic,
+            }
+        )
+
+
 class YarboDeletePathwayView(HomeAssistantView):
     """Handle widget actions for deleting a pathway."""
 
@@ -816,6 +872,106 @@ class YarboDeletePathwayView(HomeAssistantView):
 
         try:
             topic = await runtime.async_delete_pathway(command_payload)
+        except ValueError as err:
+            return web.Response(status=400, text=str(err))
+        except RuntimeError as err:
+            return web.Response(status=409, text=str(err))
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "topic": topic,
+            }
+        )
+
+
+class YarboDeleteSidewalkView(HomeAssistantView):
+    """Handle widget actions for deleting a memory path."""
+
+    url = DELETE_SIDEWALK_API_URL
+    name = "api:s2jyarbo:delete_sidewalk"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the delete_sidewalk action API view."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Publish a del_sidewalk command for one Yarbo device."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+        command_payload = payload.get("payload")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+        if not isinstance(command_payload, dict):
+            return web.Response(status=400, text="payload is required")
+
+        entry = next(
+            (
+                config_entry
+                for config_entry in self._hass.config_entries.async_entries(DOMAIN)
+                if config_entry.entry_id == entry_id
+            ),
+            None,
+        )
+        runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
+
+        if entry is None or runtime is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            topic = await runtime.async_delete_sidewalk(command_payload)
+        except ValueError as err:
+            return web.Response(status=400, text=str(err))
+        except RuntimeError as err:
+            return web.Response(status=409, text=str(err))
+
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "topic": topic,
+            }
+        )
+
+
+class YarboSaveMemoryPathSettingsView(HomeAssistantView):
+    """Handle widget actions for saving memory path settings."""
+
+    url = SAVE_MEMORY_PATH_SETTINGS_API_URL
+    name = "api:s2jyarbo:save_memory_path_settings"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the memory path settings action API view."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Publish a save_mower_path_memory_params command for one Yarbo device."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+        command_payload = payload.get("payload")
+
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+        if not isinstance(command_payload, dict):
+            return web.Response(status=400, text="payload is required")
+
+        entry = next(
+            (
+                config_entry
+                for config_entry in self._hass.config_entries.async_entries(DOMAIN)
+                if config_entry.entry_id == entry_id
+            ),
+            None,
+        )
+        runtime: YarboMqttClient | None = self._hass.data.get(DOMAIN, {}).get(entry_id)
+
+        if entry is None or runtime is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            topic = await runtime.async_save_memory_path_settings(command_payload)
         except ValueError as err:
             return web.Response(status=400, text=str(err))
         except RuntimeError as err:
@@ -1439,12 +1595,14 @@ def _parse_site_map_response(response_body: str) -> dict[str, Any] | None:
     areas = _extract_map_shapes(inner_payload.get("areas"), closed=True)
     nogozones = _extract_map_shapes(inner_payload.get("nogozones"), closed=True)
     pathways = _extract_map_shapes(inner_payload.get("pathways"), closed=False)
+    sidewalks = _extract_map_shapes(inner_payload.get("sidewalks"), closed=False)
     electric_fence = _extract_map_shapes(inner_payload.get("elec_fence"), closed=True)
     charging_points = _extract_charging_points(inner_payload.get("allchargingData"))
     reference = (
         _extract_map_reference(inner_payload.get("areas"))
         or _extract_map_reference(inner_payload.get("nogozones"))
         or _extract_map_reference(inner_payload.get("pathways"))
+        or _extract_map_reference(inner_payload.get("sidewalks"))
         or _extract_map_reference(inner_payload.get("elec_fence"))
     )
 
@@ -1453,6 +1611,7 @@ def _parse_site_map_response(response_body: str) -> dict[str, Any] | None:
         and not areas
         and not nogozones
         and not pathways
+        and not sidewalks
         and not electric_fence
         and not charging_points
     ):
@@ -1463,6 +1622,7 @@ def _parse_site_map_response(response_body: str) -> dict[str, Any] | None:
         "areas": areas,
         "nogozones": nogozones,
         "pathways": pathways,
+        "sidewalks": sidewalks,
         "electric_fence": electric_fence,
         "charging_points": charging_points,
     }
@@ -1673,11 +1833,43 @@ def _extract_map_shapes(
                 "name": candidate.get("name") or "",
                 "type": candidate.get("type"),
                 "enable": candidate.get("enable"),
+                "blade_height": candidate.get("blade_height"),
+                "en_blade": candidate.get("en_blade"),
+                "plan_speed": candidate.get("plan_speed"),
+                "connectids": candidate.get("connectids") if isinstance(candidate.get("connectids"), list) else [],
+                "head_type": candidate.get("head_type"),
+                "snowPiles": candidate.get("snowPiles") if isinstance(candidate.get("snowPiles"), list) else [],
                 "points": points,
+                "trimming_edges": _extract_trimming_edges(candidate.get("trimming_edges")),
             }
         )
 
     return shapes
+
+
+def _extract_trimming_edges(candidates: Any) -> list[dict[str, Any]]:
+    """Return simplified memory-path trimming edge geometry."""
+    if not isinstance(candidates, list):
+        return []
+
+    edges: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+
+        points = _extract_xy_points(candidate.get("range"))
+        if len(points) < 2:
+            continue
+
+        edges.append(
+            {
+                "id": candidate.get("id"),
+                "ref": candidate.get("ref") if isinstance(candidate.get("ref"), dict) else None,
+                "points": points,
+            }
+        )
+
+    return edges
 
 
 def _extract_charging_points(candidates: Any) -> list[dict[str, Any]]:

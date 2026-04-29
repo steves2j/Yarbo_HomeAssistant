@@ -115,6 +115,21 @@ def build_save_pathway_topic(serial_number: str) -> str:
     return _build_app_topic(serial_number, "save_pathway")
 
 
+def build_save_sidewalk_topic(serial_number: str) -> str:
+    """Build the MQTT topic used to save a memory path."""
+    return _build_app_topic(serial_number, "save_sidewalk")
+
+
+def build_delete_sidewalk_topic(serial_number: str) -> str:
+    """Build the MQTT topic used to delete a memory path."""
+    return _build_app_topic(serial_number, "del_sidewalk")
+
+
+def build_save_memory_path_settings_topic(serial_number: str) -> str:
+    """Build the MQTT topic used to save memory path settings."""
+    return _build_app_topic(serial_number, "save_mower_path_memory_params")
+
+
 def build_delete_pathway_topic(serial_number: str) -> str:
     """Build the MQTT topic used to delete a pathway."""
     return _build_app_topic(serial_number, "del_pathway")

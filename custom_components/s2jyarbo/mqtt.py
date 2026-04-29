@@ -33,6 +33,7 @@ from .const import (
     build_connect_wifi_name_topic,
     build_delete_nogozone_topic,
     build_delete_pathway_topic,
+    build_delete_sidewalk_topic,
     build_device_message_request_topic,
     build_get_sound_param_topic,
     build_map_request_topic,
@@ -44,8 +45,10 @@ from .const import (
     build_recharge_topic,
     build_restart_topic,
     build_resume_topic,
+    build_save_memory_path_settings_topic,
     build_save_nogozone_topic,
     build_save_pathway_topic,
+    build_save_sidewalk_topic,
     build_shutdown_topic,
     build_sound_param_topic,
     build_start_plan_topic,
@@ -298,6 +301,21 @@ class YarboMqttClient:
     async def async_save_pathway(self, payload: dict[str, Any]) -> str:
         """Publish a command to save a pathway."""
         return await self._hass.async_add_executor_job(self._save_pathway, payload)
+
+    async def async_save_sidewalk(self, payload: dict[str, Any]) -> str:
+        """Publish a command to save a memory path."""
+        return await self._hass.async_add_executor_job(self._save_sidewalk, payload)
+
+    async def async_delete_sidewalk(self, payload: dict[str, Any]) -> str:
+        """Publish a command to delete a memory path."""
+        return await self._hass.async_add_executor_job(self._delete_sidewalk, payload)
+
+    async def async_save_memory_path_settings(self, payload: dict[str, Any]) -> str:
+        """Publish updated settings for a memory path."""
+        return await self._hass.async_add_executor_job(
+            self._save_memory_path_settings,
+            payload,
+        )
 
     async def async_delete_pathway(self, payload: dict[str, Any]) -> str:
         """Publish a command to delete a pathway."""
@@ -620,6 +638,40 @@ class YarboMqttClient:
         )
         return topic
 
+    def _save_sidewalk(self, payload: dict[str, Any]) -> str:
+        """Publish a command to save a memory path."""
+        client = self._client
+        if client is None:
+            raise RuntimeError("MQTT client is not started")
+
+        if self.state.connection_state != STATE_CONNECTED:
+            raise RuntimeError("MQTT broker is not connected")
+
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+
+        normalized_payload = dict(payload)
+        normalized_payload.setdefault("connectids", [])
+        normalized_payload.setdefault("head_type", 99)
+        normalized_payload.setdefault("snowPiles", [])
+        normalized_payload.setdefault("trimming_edges", [])
+
+        topic = build_save_sidewalk_topic(self._serial_number)
+        payload_bytes = json.dumps(normalized_payload, separators=(",", ":")).encode("utf-8")
+        compressed_payload = zlib.compress(payload_bytes)
+        info = client.publish(topic, payload=compressed_payload, qos=0, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with code {info.rc}")
+
+        _LOGGER.info(
+            "Published save_sidewalk command to %s with %s range points and %s trimming edges (%s bytes)",
+            topic,
+            len(normalized_payload.get("range") or []),
+            len(normalized_payload.get("trimming_edges") or []),
+            len(compressed_payload),
+        )
+        return topic
+
     def _delete_pathway(self, payload: dict[str, Any]) -> str:
         """Publish a command to delete a pathway."""
         client = self._client
@@ -642,6 +694,34 @@ class YarboMqttClient:
 
         _LOGGER.info(
             "Published del_pathway command to %s for pathway %s (%s bytes)",
+            topic,
+            normalized_payload.get("id", normalized_payload.get("name", "unknown")),
+            len(compressed_payload),
+        )
+        return topic
+
+    def _delete_sidewalk(self, payload: dict[str, Any]) -> str:
+        """Publish a command to delete a memory path."""
+        client = self._client
+        if client is None:
+            raise RuntimeError("MQTT client is not started")
+
+        if self.state.connection_state != STATE_CONNECTED:
+            raise RuntimeError("MQTT broker is not connected")
+
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+
+        normalized_payload = dict(payload)
+        topic = build_delete_sidewalk_topic(self._serial_number)
+        payload_bytes = json.dumps(normalized_payload, separators=(",", ":")).encode("utf-8")
+        compressed_payload = zlib.compress(payload_bytes)
+        info = client.publish(topic, payload=compressed_payload, qos=0, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with code {info.rc}")
+
+        _LOGGER.info(
+            "Published del_sidewalk command to %s for memory path %s (%s bytes)",
             topic,
             normalized_payload.get("id", normalized_payload.get("name", "unknown")),
             len(compressed_payload),
@@ -702,6 +782,44 @@ class YarboMqttClient:
 
         _LOGGER.info(
             "Published del_nogozone command to %s for no-go zone %s (%s bytes)",
+            topic,
+            normalized_payload.get("id", "unknown"),
+            len(compressed_payload),
+        )
+        return topic
+
+    def _save_memory_path_settings(self, payload: dict[str, Any]) -> str:
+        """Publish updated settings for a memory path."""
+        client = self._client
+        if client is None:
+            raise RuntimeError("MQTT client is not started")
+
+        if self.state.connection_state != STATE_CONNECTED:
+            raise RuntimeError("MQTT broker is not connected")
+
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+
+        normalized_payload = dict(payload)
+        normalized_payload.setdefault("blade_speed", 0)
+        normalized_payload.setdefault("blade_height", 0)
+        normalized_payload.setdefault("turn_type", 0)
+        normalized_payload.setdefault("land_push_pod_place", 0)
+        normalized_payload.setdefault("route_angle", 0)
+        normalized_payload.setdefault("route_dis", 0.0)
+        normalized_payload.setdefault("offset_enable", None)
+        normalized_payload.setdefault("en_blade", True)
+        normalized_payload.setdefault("plan_speed", 0.5)
+
+        topic = build_save_memory_path_settings_topic(self._serial_number)
+        payload_bytes = json.dumps(normalized_payload, separators=(",", ":")).encode("utf-8")
+        compressed_payload = zlib.compress(payload_bytes)
+        info = client.publish(topic, payload=compressed_payload, qos=0, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with code {info.rc}")
+
+        _LOGGER.info(
+            "Published save_mower_path_memory_params command to %s for memory path %s (%s bytes)",
             topic,
             normalized_payload.get("id", "unknown"),
             len(compressed_payload),

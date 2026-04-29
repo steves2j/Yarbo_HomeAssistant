@@ -2,6 +2,8 @@ const FIXED_GPS_CALIBRATION = {
   longitudinal: 0.12733925057566753,
   lateral: 0.2076810316749709,
 };
+const MEMORY_PATH_WIDTH_METERS = 0.55;
+const MEMORY_PATH_HALF_WIDTH_METERS = MEMORY_PATH_WIDTH_METERS / 2;
 
 class S2JYarboMapCard extends HTMLElement {
   constructor() {
@@ -45,6 +47,17 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftKind = "pathway";
     this._pathwayDraftEnabled = true;
     this._pathwayDraftType = 0;
+    this._pathwayDraftConnectIds = [];
+    this._pathwayDraftHeadType = 99;
+    this._pathwayDraftSnowPiles = [];
+    this._pathwayDraftTrimmingEdges = [];
+    this._pathwayDraftTrimmingEdgeAnchors = [];
+    this._memoryPathTrimmerMode = false;
+    this._memoryPathAutoAddTrimmingEdges = false;
+    this._selectedDraftPointIndex = null;
+    this._selectedTrimmingEdgeIndex = null;
+    this._selectedTrimmingPointIndex = null;
+    this._selectedTrimmingSelectionKind = null;
     this._pathwayDraftPendingName = "";
     this._pathwayDraftOriginalSignature = "";
     this._pathwayNameDialogOpen = false;
@@ -52,8 +65,15 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftNotice = "";
     this._pathwayNameDialogMode = "create";
     this._selectedPathwayKey = "";
+    this._selectedMemoryPathKey = "";
     this._selectedNoGoKey = "";
     this._pathwayDeleteDialogOpen = false;
+    this._memoryPathSettingsDialogOpen = false;
+    this._memoryPathSettings = {
+      en_blade: true,
+      blade_height: 0,
+      plan_speed: 0.5,
+    };
     this._unsavedChangesDialogOpen = false;
     this._unsavedChangesAction = null;
     this._unsavedChangesNavigationUrl = "";
@@ -81,6 +101,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._handlePopStateCapture = this._handlePopStateCapture.bind(this);
     this._handlePointerMove = this._handlePointerMove.bind(this);
     this._handlePointerUp = this._handlePointerUp.bind(this);
+    this._handleKeyDown = this._handleKeyDown.bind(this);
     this._handleWheel = this._handleWheel.bind(this);
   }
 
@@ -139,6 +160,7 @@ class S2JYarboMapCard extends HTMLElement {
   connectedCallback() {
     window.addEventListener("beforeunload", this._handleBeforeUnload);
     window.addEventListener("popstate", this._handlePopStateCapture, true);
+    window.addEventListener("keydown", this._handleKeyDown);
     document.addEventListener("click", this._handleDocumentClickCapture, true);
     this._installHistoryNavigationGuard();
     this._render();
@@ -147,6 +169,7 @@ class S2JYarboMapCard extends HTMLElement {
   disconnectedCallback() {
     window.removeEventListener("beforeunload", this._handleBeforeUnload);
     window.removeEventListener("popstate", this._handlePopStateCapture, true);
+    window.removeEventListener("keydown", this._handleKeyDown);
     document.removeEventListener("click", this._handleDocumentClickCapture, true);
     this._restoreHistoryNavigationGuard();
     if (this._refreshHandle) {
@@ -722,7 +745,7 @@ class S2JYarboMapCard extends HTMLElement {
           white-space: nowrap;
         }
         .map-edit-tools.is-open {
-          max-width: 220px;
+          max-width: 270px;
           opacity: 1;
           pointer-events: auto;
           transform: translateX(0);
@@ -882,6 +905,19 @@ class S2JYarboMapCard extends HTMLElement {
           gap: 10px;
           justify-content: end;
           margin-top: 4px;
+        }
+        .map-unsaved-actions {
+          align-items: center;
+          display: flex;
+          gap: 10px;
+          justify-content: space-between;
+          margin-top: 4px;
+        }
+        .map-unsaved-actions-right {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          justify-content: end;
         }
         .map-button {
           align-items: center;
@@ -1198,6 +1234,9 @@ class S2JYarboMapCard extends HTMLElement {
                     <button class="map-button is-icon-only ${this._activeEditTool === "wp" ? "is-active" : ""}" type="button" data-action="tool-wp" aria-label="Waypoint" title="Waypoint">
                       <ha-icon icon="mdi:vector-polyline"></ha-icon>
                     </button>
+                    <button class="map-button is-icon-only ${this._activeEditTool === "mp" ? "is-active" : ""}" type="button" data-action="tool-mp" aria-label="Memory path" title="Memory path">
+                      <ha-icon icon="mdi:memory"></ha-icon>
+                    </button>
                   </div>
                 </div>
               ` : ""}
@@ -1275,6 +1314,7 @@ class S2JYarboMapCard extends HTMLElement {
                   ${this._planFeedbackVisible ? drawing.planFeedbackShapes : ""}
                   ${this._cloudPointsVisible ? drawing.cloudPointsShapes : ""}
                   ${drawing.rechargePathShape}
+                  ${drawing.sidewalkShapes}
                   ${drawing.pathwayShapes}
                   ${drawing.chargingShapes}
                   ${drawing.editDraftShapes}
@@ -1285,6 +1325,7 @@ class S2JYarboMapCard extends HTMLElement {
             </svg>
             ${this._editMode && (
               this._activeEditTool === "pa"
+              || this._activeEditTool === "mp"
               || this._activeEditTool === "pathway-edit"
               || this._activeEditTool === "pathway-move"
               || this._activeEditTool === "ng"
@@ -1292,6 +1333,12 @@ class S2JYarboMapCard extends HTMLElement {
               || this._activeEditTool === "nogozone-move"
             ) ? `
               <div class="map-edit-actions">
+                ${this._pathwayDraftKind === "sidewalk" ? `
+                  <button class="map-button ${this._memoryPathTrimmerMode ? "is-active" : ""}" type="button" data-action="edit-trimmer">${this._memoryPathTrimmerMode ? "Edit path" : "Edit trimmer"}</button>
+                  ${this._activeEditTool === "mp" ? `
+                    <button class="map-button ${this._memoryPathAutoAddTrimmingEdges ? "is-active" : ""}" type="button" data-action="toggle-auto-trimmer">${this._memoryPathAutoAddTrimmingEdges ? "Trimmer On" : "Trimmer Off"}</button>
+                  ` : ""}
+                ` : ""}
                 <button class="map-button is-active" type="button" data-action="edit-accept">✓</button>
                 <button class="map-button" type="button" data-action="edit-cancel">✕</button>
               </div>
@@ -1304,7 +1351,15 @@ class S2JYarboMapCard extends HTMLElement {
                 <button class="map-button" type="button" data-action="pathway-delete">Delete</button>
               </div>
             ` : ""}
-            ${this._editMode && !this._activeEditTool && !this._selectedPathway() && this._selectedNoGoZone() ? `
+            ${this._editMode && !this._activeEditTool && !this._selectedPathway() && this._selectedMemoryPath() ? `
+              <div class="map-selected-actions">
+                <button class="map-button is-active" type="button" data-action="memorypath-edit">Edit</button>
+                <button class="map-button" type="button" data-action="memorypath-rename">Rename</button>
+                <button class="map-button" type="button" data-action="memorypath-settings">Settings</button>
+                <button class="map-button" type="button" data-action="memorypath-delete">Delete</button>
+              </div>
+            ` : ""}
+            ${this._editMode && !this._activeEditTool && !this._selectedPathway() && !this._selectedMemoryPath() && this._selectedNoGoZone() ? `
               <div class="map-selected-actions">
                 <button class="map-button is-active" type="button" data-action="nogozone-edit">Edit</button>
                 <button class="map-button" type="button" data-action="nogozone-rename">Rename</button>
@@ -1316,6 +1371,7 @@ class S2JYarboMapCard extends HTMLElement {
             ${this._renderEditContextMenu()}
             ${this._renderPathwayNameDialog()}
             ${this._renderPathwayDeleteDialog()}
+            ${this._renderMemoryPathSettingsDialog()}
             ${this._renderUnsavedChangesDialog()}
             ${this._renderEditConfirmationDialog()}
             <div class="map-overlay map-overlay-left">
@@ -1418,6 +1474,13 @@ class S2JYarboMapCard extends HTMLElement {
       this._render();
     });
 
+    body.querySelector('[data-action="tool-mp"]')?.addEventListener("click", () => {
+      if (!this._editMode) {
+        return;
+      }
+      this._beginMemoryPathDraftSession();
+    });
+
     body.querySelector('[data-action="pathway-edit"]')?.addEventListener("click", () => {
       this._beginSelectedPathwayEdit();
     });
@@ -1433,6 +1496,22 @@ class S2JYarboMapCard extends HTMLElement {
 
     body.querySelector('[data-action="pathway-delete"]')?.addEventListener("click", () => {
       this._beginSelectedPathwayDelete();
+    });
+
+    body.querySelector('[data-action="memorypath-edit"]')?.addEventListener("click", () => {
+      this._beginSelectedMemoryPathEdit();
+    });
+
+    body.querySelector('[data-action="memorypath-rename"]')?.addEventListener("click", () => {
+      this._beginSelectedMemoryPathRename();
+    });
+
+    body.querySelector('[data-action="memorypath-settings"]')?.addEventListener("click", () => {
+      this._beginSelectedMemoryPathSettings();
+    });
+
+    body.querySelector('[data-action="memorypath-delete"]')?.addEventListener("click", () => {
+      this._beginSelectedMemoryPathDelete();
     });
 
     body.querySelector('[data-action="nogozone-edit"]')?.addEventListener("click", () => {
@@ -1460,6 +1539,14 @@ class S2JYarboMapCard extends HTMLElement {
       this._acceptPathwayDraft();
     });
 
+    body.querySelector('[data-action="edit-trimmer"]')?.addEventListener("click", () => {
+      this._toggleMemoryPathTrimmerEdit();
+    });
+
+    body.querySelector('[data-action="toggle-auto-trimmer"]')?.addEventListener("click", () => {
+      this._toggleMemoryPathAutoAddTrimmingEdges();
+    });
+
     body.querySelector('[data-action="edit-cancel"]')?.addEventListener("click", () => {
       if (this._hasUnsavedPathwayDraftChanges()) {
         this._openUnsavedChangesDialog("cancel-draft");
@@ -1482,6 +1569,14 @@ class S2JYarboMapCard extends HTMLElement {
 
     body.querySelector('[data-action="pathway-delete-cancel"]')?.addEventListener("click", () => {
       this._dismissPathwayDeleteDialog();
+    });
+
+    body.querySelector('[data-action="memorypath-settings-save"]')?.addEventListener("click", () => {
+      void this._saveSelectedMemoryPathSettings();
+    });
+
+    body.querySelector('[data-action="memorypath-settings-cancel"]')?.addEventListener("click", () => {
+      this._dismissMemoryPathSettingsDialog();
     });
 
     body.querySelector('[data-action="context-tocircle"]')?.addEventListener("click", () => {
@@ -1516,6 +1611,26 @@ class S2JYarboMapCard extends HTMLElement {
           this._dismissPathwayNameDialog();
         }
       });
+    }
+
+    const memoryPathBladeToggle = body.querySelector('[data-action="memorypath-settings-blade"]');
+    if (memoryPathBladeToggle instanceof HTMLInputElement) {
+      memoryPathBladeToggle.addEventListener("change", (event) => {
+        if (event.currentTarget instanceof HTMLInputElement) {
+          this._memoryPathSettings.en_blade = event.currentTarget.checked;
+        }
+      });
+    }
+
+    for (const fieldName of ["blade_height", "plan_speed"]) {
+      const input = body.querySelector(`[data-action="memorypath-settings-${fieldName}"]`);
+      if (input instanceof HTMLInputElement) {
+        input.addEventListener("input", (event) => {
+          if (event.currentTarget instanceof HTMLInputElement) {
+            this._memoryPathSettings[fieldName] = event.currentTarget.value;
+          }
+        });
+      }
     }
 
     body.querySelector('[data-action="zoom-in"]')?.addEventListener("click", () => {
@@ -1624,6 +1739,8 @@ class S2JYarboMapCard extends HTMLElement {
     if (!Array.isArray(this._pathwayDraftPoints) || this._pathwayDraftPoints.length < minimumPoints) {
       this._pathwayDraftNotice = this._pathwayDraftKind === "nogozone"
         ? "Select a no-go zone with at least three points before rotating."
+        : this._pathwayDraftKind === "sidewalk"
+          ? "Select a memory path with at least two points before rotating."
         : "Select a pathway with at least two points before rotating.";
       this._render();
       return true;
@@ -1684,9 +1801,14 @@ class S2JYarboMapCard extends HTMLElement {
 
   _prepareSelectedFeatureForTransform() {
     const selectedPathway = this._selectedPathway();
-    const selectedNoGoZone = selectedPathway ? null : this._selectedNoGoZone();
+    const selectedMemoryPath = selectedPathway ? null : this._selectedMemoryPath();
+    const selectedNoGoZone = selectedPathway || selectedMemoryPath ? null : this._selectedNoGoZone();
     if (selectedPathway) {
       this._prepareSelectedPathwayMove(selectedPathway);
+      return true;
+    }
+    if (selectedMemoryPath) {
+      this._prepareSelectedMemoryPathMove(selectedMemoryPath);
       return true;
     }
     if (selectedNoGoZone) {
@@ -1722,9 +1844,33 @@ class S2JYarboMapCard extends HTMLElement {
         y: center.y + offsetX * sin + offsetY * cos,
       };
     });
+    if (this._pathwayDraftKind === "sidewalk" && Array.isArray(this._pathwayDraftTrimmingEdges)) {
+      this._pathwayDraftTrimmingEdges = this._pathwayDraftTrimmingEdges.map((edge) => ({
+        ...edge,
+        points: Array.isArray(edge.points)
+          ? edge.points.map((point) => {
+              const x = Number(point.x);
+              const y = Number(point.y);
+              if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                return { ...point };
+              }
+
+              const offsetX = x - center.x;
+              const offsetY = y - center.y;
+              return {
+                ...point,
+                x: center.x + offsetX * cos - offsetY * sin,
+                y: center.y + offsetX * sin + offsetY * cos,
+              };
+            })
+          : [],
+      }));
+    }
     this._pathwayDraftJson = this._buildPathwayDraftJson();
     this._pathwayDraftNotice = this._pathwayDraftKind === "nogozone"
       ? "No-go zone rotated. Click tick to save or cross to cancel."
+      : this._pathwayDraftKind === "sidewalk"
+        ? "Memory path rotated. Click tick to save or cross to cancel."
       : "Pathway rotated. Click tick to save or cross to cancel.";
     this._editContextMenu = null;
     this._render();
@@ -1810,20 +1956,24 @@ class S2JYarboMapCard extends HTMLElement {
       return;
     }
 
+    if (this._editMode && this._isMemoryPathTrimmerEditActive()) {
+      this._handleMemoryPathTrimmerPointerDown(event);
+      return;
+    }
+
+    if (this._editMode && event.shiftKey && this._canAddConnectedDraftPoint()) {
+      this._startPanDrag(event, { addDraftPointOnClick: true });
+      return;
+    }
+
     if (this._editMode && !event.shiftKey) {
-      const isPathwayDraftTool =
-        this._activeEditTool === "pa"
-        || this._activeEditTool === "ng"
-        || this._activeEditTool === "pathway-edit"
-        || this._activeEditTool === "nogozone-edit"
-        || this._activeEditTool === "pathway-move"
-        || this._activeEditTool === "nogozone-move";
+      const isPathwayDraftTool = this._isDraftEditActive();
       if (
         event.ctrlKey
         && isPathwayDraftTool
       ) {
         this._startPathwayShapeDrag(event);
-      } else if (this._activeEditTool === "pa" || this._activeEditTool === "ng") {
+      } else if (this._activeEditTool === "pa" || this._activeEditTool === "mp" || this._activeEditTool === "ng") {
         if (!this._startPathwayPointDrag(event)) {
           if (!this._handleExistingPathwayEditClick(event)) {
             this._handlePathwayDraftClick(event);
@@ -1869,6 +2019,7 @@ class S2JYarboMapCard extends HTMLElement {
       unitsPerPixelX: viewBox.width / Math.max(rect.width, 1),
       unitsPerPixelY: viewBox.height / Math.max(rect.height, 1),
       selectOnClick: Boolean(options.selectOnClick),
+      addDraftPointOnClick: Boolean(options.addDraftPointOnClick),
       dragged: false,
       svg: event.currentTarget,
     };
@@ -1897,6 +2048,40 @@ class S2JYarboMapCard extends HTMLElement {
       const nextPoints = [...this._pathwayDraftPoints];
       nextPoints[drag.pointIndex] = localPoint;
       this._pathwayDraftPoints = nextPoints;
+      this._selectedDraftPointIndex = drag.pointIndex;
+      if (this._pathwayDraftKind === "sidewalk") {
+        this._pathwayDraftTrimmingEdges =
+          this._resnapMemoryPathTrimmingEdgesForMovedCenterPoint(
+            drag.pointIndex,
+            Array.isArray(drag.startPoints) ? drag.startPoints : [],
+            nextPoints,
+            Array.isArray(drag.startTrimmingEdges) ? drag.startTrimmingEdges : [],
+          );
+      }
+      this._pathwayDraftJson = this._buildPathwayDraftJson();
+      drag.dragged = true;
+      this._render();
+      const nextSvg = this.shadowRoot?.querySelector(".map-svg");
+      if (nextSvg instanceof SVGSVGElement) {
+        drag.svg = nextSvg;
+      }
+      const canvas = this.shadowRoot?.querySelector(".map-canvas");
+      canvas?.classList.add("is-dragging");
+      return;
+    }
+
+    if (drag.kind === "trimmer-point") {
+      const localPoint = this._localPointFromSvgEvent(drag.svg, event);
+      const snappedPoint = localPoint ? this._snapMemoryPathTrimmerPoint(localPoint) : null;
+      if (!snappedPoint) {
+        return;
+      }
+
+      this._updateMemoryPathTrimmingPoint(drag.edgeIndex, drag.pointIndex, snappedPoint);
+      this._selectedTrimmingEdgeIndex = drag.edgeIndex;
+      this._selectedTrimmingPointIndex = drag.pointIndex;
+      this._pathwayDraftTrimmingEdgeAnchors =
+        this._memoryPathTrimmingEdgeAnchors(this._pathwayDraftPoints, this._pathwayDraftTrimmingEdges);
       this._pathwayDraftJson = this._buildPathwayDraftJson();
       drag.dragged = true;
       this._render();
@@ -1922,9 +2107,23 @@ class S2JYarboMapCard extends HTMLElement {
         x: Number(point.x) + deltaX,
         y: Number(point.y) + deltaY,
       }));
+      this._pathwayDraftTrimmingEdges = Array.isArray(drag.startTrimmingEdges)
+        ? drag.startTrimmingEdges.map((edge) => ({
+            ...edge,
+            points: Array.isArray(edge.points)
+              ? edge.points.map((point) => ({
+                  ...point,
+                  x: Number(point.x) + deltaX,
+                  y: Number(point.y) + deltaY,
+                }))
+              : [],
+          }))
+        : [];
       this._pathwayDraftJson = this._buildPathwayDraftJson();
       this._pathwayDraftNotice = this._pathwayDraftKind === "nogozone"
         ? "No-go zone moved. Click tick to save or cross to cancel."
+        : this._pathwayDraftKind === "sidewalk"
+          ? "Memory path moved. Click tick to save or cross to cancel."
         : "Pathway moved. Click tick to save or cross to cancel.";
       drag.dragged = true;
       this._render();
@@ -1957,6 +2156,18 @@ class S2JYarboMapCard extends HTMLElement {
       return;
     }
 
+    if (drag.kind === "pan" && drag.addDraftPointOnClick && !drag.dragged) {
+      const draftClickEvent = {
+        currentTarget: drag.svg,
+        button: 0,
+        clientX: drag.startClientX,
+        clientY: drag.startClientY,
+      };
+      this._clearActiveDrag();
+      this._handleConnectedPathwayDraftClick(draftClickEvent);
+      return;
+    }
+
     if (drag.kind === "pan" && drag.selectOnClick && !drag.dragged) {
       const selectionEvent = {
         currentTarget: drag.svg,
@@ -1970,12 +2181,22 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     if (drag.kind === "pathway-point" && !drag.dragged) {
-      this._removePathwayDraftPoint(drag.pointIndex);
+      this._selectedDraftPointIndex = drag.pointIndex;
+      this._pathwayDraftNotice = `${this._pathwayDraftKind === "nogozone" ? "No-go zone" : this._pathwayDraftKind === "sidewalk" ? "Memory path" : "Pathway"} point selected. Press Backspace or Delete to remove it.`;
+    }
+
+    if (drag.kind === "trimmer-point" && !drag.dragged) {
+      this._selectedTrimmingEdgeIndex = drag.edgeIndex;
+      this._selectedTrimmingPointIndex = drag.pointIndex;
+      this._selectedTrimmingSelectionKind = "point";
+      this._pathwayDraftNotice = `Selected trimmer segment ${drag.edgeIndex + 1}. Hold Shift and click to add a snapped point.`;
     }
 
     if (drag.kind === "pathway-shape" && !drag.dragged) {
       this._pathwayDraftNotice = this._pathwayDraftKind === "nogozone"
         ? "No-go zone ready to move. Drag with Ctrl held, or click cross to cancel."
+        : this._pathwayDraftKind === "sidewalk"
+          ? "Memory path ready to move. Drag with Ctrl held, or click cross to cancel."
         : "Pathway ready to move. Drag with Ctrl held, or click cross to cancel.";
     }
 
@@ -2022,6 +2243,7 @@ class S2JYarboMapCard extends HTMLElement {
     const areaShapes = Array.isArray(siteMap.areas) ? siteMap.areas : [];
     const noGoShapes = Array.isArray(siteMap.nogozones) ? siteMap.nogozones : [];
     const pathwayShapes = Array.isArray(siteMap.pathways) ? siteMap.pathways : [];
+    const sidewalkShapes = Array.isArray(siteMap.sidewalks) ? siteMap.sidewalks : [];
     const fenceShapes = Array.isArray(siteMap.electric_fence) ? siteMap.electric_fence : [];
     const chargingPoints = Array.isArray(siteMap.charging_points) ? siteMap.charging_points : [];
     const planFeedback = this._planFeedback(entry);
@@ -2042,6 +2264,10 @@ class S2JYarboMapCard extends HTMLElement {
       ...areaShapes.flatMap((shape) => this._displayPoints(shape.points)),
       ...noGoShapes.flatMap((shape) => this._displayPoints(shape.points)),
       ...pathwayShapes.flatMap((shape) => this._displayPoints(shape.points)),
+      ...sidewalkShapes.flatMap((shape) => [
+        ...this._displayPoints(shape.points),
+        ...this._memoryPathEdgePoints(shape).flatMap((edge) => this._displayPoints(edge.points)),
+      ]),
       ...fenceShapes.flatMap((shape) => this._displayPoints(shape.points)),
       ...planPoints,
       ...cloudPoints,
@@ -2128,6 +2354,15 @@ class S2JYarboMapCard extends HTMLElement {
         .join(""),
       rechargePathShape:
         rechargePoints.length >= 2 ? this._renderRechargePath(rechargeFeedback) : "",
+      sidewalkShapes: sidewalkShapes
+        .map((shape, index) =>
+          this._renderMemoryPathShape(shape, {
+            selected:
+              this._selectedMemoryPathKey !== ""
+              && this._selectedMemoryPathKey === this._memoryPathKey(shape, index),
+          }),
+        )
+        .join(""),
       pathwayShapes: pathwayShapes
         .map((shape, index) =>
           this._renderPathwayShape(shape, {
@@ -2210,6 +2445,63 @@ class S2JYarboMapCard extends HTMLElement {
         vector-effect="non-scaling-stroke"
       ></polyline>
     `;
+  }
+
+  _renderMemoryPathShape(shape, options = {}) {
+    const points = Array.isArray(shape?.points) ? shape.points : [];
+    if (points.length < 2) {
+      return "";
+    }
+
+    const selected = options.selected === true;
+    const edgeShapes = this._memoryPathEdgePoints(shape);
+    return `
+      <polyline
+        points="${this._escape(this._svgPoints(points))}"
+        fill="none"
+        stroke="${selected ? "rgba(56, 189, 248, 0.42)" : "rgba(56, 189, 248, 0.26)"}"
+        stroke-width="${this._number(MEMORY_PATH_WIDTH_METERS)}"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      ></polyline>
+      <polyline
+        points="${this._escape(this._svgPoints(points))}"
+        fill="none"
+        stroke="${selected ? "#e0f2fe" : "rgba(14, 165, 233, 0.88)"}"
+        stroke-width="${selected ? "0.1" : "0.06"}"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      ></polyline>
+      ${edgeShapes.map((edge) => `
+        <polyline
+          points="${this._escape(this._svgPoints(edge.points))}"
+          fill="none"
+          stroke="${selected ? "#fef08a" : "#facc15"}"
+          stroke-width="${selected ? "0.12" : "0.08"}"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        ></polyline>
+      `).join("")}
+    `;
+  }
+
+  _memoryPathEdgePoints(shape) {
+    const edges = Array.isArray(shape?.trimming_edges) ? shape.trimming_edges : [];
+    const normalizedEdges = edges
+      .map((edge) => ({
+        ...edge,
+        ref: edge?.ref,
+        points: Array.isArray(edge?.points) ? edge.points : [],
+      }))
+      .filter((edge) => edge.points.length >= 2);
+    if (normalizedEdges.length) {
+      return normalizedEdges;
+    }
+
+    const fallbackPoints = Array.isArray(shape?.points)
+      ? this._memoryPathRightEdgeFromPoints(shape.points)
+      : [];
+    return fallbackPoints.length >= 2 ? [{ id: 1, points: fallbackPoints }] : [];
   }
 
   _renderPlanFeedbackSegment(segment) {
@@ -2671,9 +2963,13 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     const isNoGoZone = this._pathwayDraftKind === "nogozone";
+    const isMemoryPath = this._pathwayDraftKind === "sidewalk";
+    const previewCommand = this._pathwayDraftCommandName();
     const jsonText = this._pathwayDraftJson || this._pathwayDraftCommittedJson || "";
     const note = this._pathwayDraftNotice
-      || (((this._activeEditTool === "pa" || this._activeEditTool === "pathway-edit") && !isNoGoZone)
+      || (isMemoryPath
+        ? "Review the generated save_sidewalk payload."
+      : ((this._activeEditTool === "pa" || this._activeEditTool === "pathway-edit") && !isNoGoZone)
         ? "Review the generated save_pathway payload."
         : ((this._activeEditTool === "ng" || this._activeEditTool === "nogozone-edit") && isNoGoZone)
           ? "Review the generated save_nogozone payload."
@@ -2682,7 +2978,7 @@ class S2JYarboMapCard extends HTMLElement {
     return `
       <div class="dev-json-panel">
         <div class="dev-json-header">
-          <span class="dev-json-title">${isNoGoZone ? "save_nogozone preview" : "save_pathway preview"}</span>
+          <span class="dev-json-title">${previewCommand} preview</span>
           <span class="dev-json-note">${this._escape(note)}</span>
         </div>
         <textarea class="dev-json-preview" readonly>${this._escape(jsonText)}</textarea>
@@ -2698,7 +2994,29 @@ class S2JYarboMapCard extends HTMLElement {
     return Array.isArray(this._entry?.site_map?.pathways) ? this._entry.site_map.pathways : [];
   }
 
+  _siteMemoryPaths() {
+    return Array.isArray(this._entry?.site_map?.sidewalks) ? this._entry.site_map.sidewalks : [];
+  }
+
   _pathwayKey(shape, index = 0) {
+    if (!shape || typeof shape !== "object") {
+      return "";
+    }
+
+    const id = shape.id;
+    if (id !== null && id !== undefined && `${id}` !== "") {
+      return `id:${id}`;
+    }
+
+    const name = typeof shape.name === "string" ? shape.name.trim() : "";
+    if (name) {
+      return `name:${name}:${index}`;
+    }
+
+    return `index:${index}`;
+  }
+
+  _memoryPathKey(shape, index = 0) {
     if (!shape || typeof shape !== "object") {
       return "";
     }
@@ -2729,6 +3047,70 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     return null;
+  }
+
+  _selectedMemoryPath() {
+    const memoryPaths = this._siteMemoryPaths();
+    for (const [index, shape] of memoryPaths.entries()) {
+      if (this._memoryPathKey(shape, index) === this._selectedMemoryPathKey) {
+        return {
+          ...shape,
+          _index: index,
+          _key: this._selectedMemoryPathKey,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  _resetMemoryPathDraftDetails() {
+    this._pathwayDraftConnectIds = [];
+    this._pathwayDraftHeadType = 99;
+    this._pathwayDraftSnowPiles = [];
+    this._pathwayDraftTrimmingEdges = [];
+    this._pathwayDraftTrimmingEdgeAnchors = [];
+    this._memoryPathTrimmerMode = false;
+    this._memoryPathAutoAddTrimmingEdges = false;
+    this._selectedDraftPointIndex = null;
+    this._selectedTrimmingEdgeIndex = null;
+    this._selectedTrimmingPointIndex = null;
+    this._selectedTrimmingSelectionKind = null;
+  }
+
+  _setMemoryPathDraftFromShape(selectedMemoryPath) {
+    this._pathwayDraftKind = "sidewalk";
+    this._pathwayDraftId = selectedMemoryPath.id ?? null;
+    this._pathwayDraftName = selectedMemoryPath.name || "Memory Path";
+    this._pathwayDraftEnabled = true;
+    this._pathwayDraftType = 0;
+    this._pathwayDraftConnectIds = Array.isArray(selectedMemoryPath.connectids)
+      ? selectedMemoryPath.connectids.map((id) => id)
+      : [];
+    this._pathwayDraftHeadType = Number.isFinite(Number(selectedMemoryPath.head_type))
+      ? Number(selectedMemoryPath.head_type)
+      : 99;
+    this._pathwayDraftSnowPiles = Array.isArray(selectedMemoryPath.snowPiles)
+      ? selectedMemoryPath.snowPiles.map((item) => item)
+      : [];
+    this._pathwayDraftPoints = Array.isArray(selectedMemoryPath.points)
+      ? selectedMemoryPath.points.map((point) => ({ ...point }))
+      : [];
+    this._pathwayDraftTrimmingEdges = this._memoryPathEdgePoints(selectedMemoryPath)
+      .map((edge) => ({
+        id: edge.id,
+        ref: edge.ref,
+        points: edge.points.map((point) => ({ ...point })),
+      }));
+    this._pathwayDraftTrimmingEdgeAnchors =
+      this._memoryPathTrimmingEdgeAnchors(this._pathwayDraftPoints, this._pathwayDraftTrimmingEdges);
+    this._memoryPathTrimmerMode = false;
+    this._memoryPathAutoAddTrimmingEdges = false;
+    this._selectedDraftPointIndex = null;
+    this._selectedTrimmingEdgeIndex = null;
+    this._selectedTrimmingPointIndex = null;
+    this._selectedTrimmingSelectionKind = null;
+    this._pathwayDraftJson = this._buildPathwayDraftJson();
   }
 
   _noGoKey(shape, index = 0) {
@@ -2770,9 +3152,10 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     const selectedPathway = this._selectedPathway();
-    const selectedNoGoZone = selectedPathway ? null : this._selectedNoGoZone();
+    const selectedMemoryPath = selectedPathway ? null : this._selectedMemoryPath();
+    const selectedNoGoZone = selectedPathway || selectedMemoryPath ? null : this._selectedNoGoZone();
     const activePathOrNoGoDraft = this._isDraftEditActive();
-    const hasSelectedObject = Boolean(selectedPathway || selectedNoGoZone || activePathOrNoGoDraft);
+    const hasSelectedObject = Boolean(selectedPathway || selectedMemoryPath || selectedNoGoZone || activePathOrNoGoDraft);
     const selectedIsNoGoZone =
       Boolean(selectedNoGoZone)
       || (activePathOrNoGoDraft && this._pathwayDraftKind === "nogozone");
@@ -2860,10 +3243,12 @@ class S2JYarboMapCard extends HTMLElement {
               Unsaved changes have been made. Are you sure you want to discard them?
             </p>
           </div>
-          <div class="map-edit-confirmation-actions">
-            <button class="map-button" type="button" data-action="unsaved-no" ${this._pathwayDraftSending ? "disabled" : ""}>No</button>
-            <button class="map-button" type="button" data-action="unsaved-yes" ${this._pathwayDraftSending ? "disabled" : ""}>Yes</button>
+          <div class="map-unsaved-actions">
             <button class="map-button is-active" type="button" data-action="unsaved-save" ${this._pathwayDraftSending ? "disabled" : ""}>Save</button>
+            <div class="map-unsaved-actions-right">
+              <button class="map-button" type="button" data-action="unsaved-no" ${this._pathwayDraftSending ? "disabled" : ""}>No</button>
+              <button class="map-button" type="button" data-action="unsaved-yes" ${this._pathwayDraftSending ? "disabled" : ""}>Yes</button>
+            </div>
           </div>
         </div>
       </div>
@@ -2872,17 +3257,19 @@ class S2JYarboMapCard extends HTMLElement {
 
   _renderPathwayDeleteDialog() {
     const selectedPathway = this._selectedPathway();
-    const selectedNoGoZone = this._selectedNoGoZone();
-    const selectedFeature = selectedPathway || selectedNoGoZone;
+    const selectedMemoryPath = selectedPathway ? null : this._selectedMemoryPath();
+    const selectedNoGoZone = selectedPathway || selectedMemoryPath ? null : this._selectedNoGoZone();
+    const selectedFeature = selectedPathway || selectedMemoryPath || selectedNoGoZone;
     if (!this._pathwayDeleteDialogOpen || !selectedFeature) {
       return "";
     }
 
     const isNoGoZone = Boolean(selectedNoGoZone && !selectedPathway);
+    const isMemoryPath = Boolean(selectedMemoryPath && !selectedPathway && !selectedNoGoZone);
     const label = selectedFeature.name
-      || `${isNoGoZone ? "No-go zone" : "Pathway"} ${selectedFeature.id ?? ""}`.trim();
+      || `${isNoGoZone ? "No-go zone" : isMemoryPath ? "Memory path" : "Pathway"} ${selectedFeature.id ?? ""}`.trim();
     const escapedLabel = this._escape(label);
-    const title = isNoGoZone ? "Delete no-go zone" : "Delete pathway";
+    const title = isNoGoZone ? "Delete no-go zone" : isMemoryPath ? "Delete memory path" : "Delete pathway";
     const copy = `Are you sure you want to delete ${escapedLabel}?`;
     return `
       <div class="map-dialog-backdrop">
@@ -2898,24 +3285,77 @@ class S2JYarboMapCard extends HTMLElement {
     `;
   }
 
+  _renderMemoryPathSettingsDialog() {
+    const selectedMemoryPath = this._selectedMemoryPath();
+    if (!this._memoryPathSettingsDialogOpen || !selectedMemoryPath) {
+      return "";
+    }
+
+    const label = selectedMemoryPath.name || `Memory path ${selectedMemoryPath.id ?? ""}`.trim();
+    return `
+      <div class="map-dialog-backdrop">
+        <div class="map-dialog" role="dialog" aria-modal="true" aria-label="Memory path settings">
+          <div class="map-dialog-title">Memory path settings</div>
+          <div class="map-dialog-copy">${this._escape(label)}</div>
+          <label class="map-dialog-copy">
+            <input
+              type="checkbox"
+              data-action="memorypath-settings-blade"
+              ${this._memoryPathSettings.en_blade !== false ? "checked" : ""}
+              ${this._pathwayDraftSending ? "disabled" : ""}
+            />
+            Blade enabled
+          </label>
+          <input
+            class="map-dialog-input"
+            type="number"
+            step="1"
+            data-action="memorypath-settings-blade_height"
+            value="${this._escape(this._memoryPathSettings.blade_height)}"
+            placeholder="Blade height"
+            ${this._pathwayDraftSending ? "disabled" : ""}
+          />
+          <input
+            class="map-dialog-input"
+            type="number"
+            step="0.1"
+            min="0"
+            data-action="memorypath-settings-plan_speed"
+            value="${this._escape(this._memoryPathSettings.plan_speed)}"
+            placeholder="Plan speed"
+            ${this._pathwayDraftSending ? "disabled" : ""}
+          />
+          <div class="map-dialog-actions">
+            <button class="map-button" type="button" data-action="memorypath-settings-cancel" ${this._pathwayDraftSending ? "disabled" : ""}>Cancel</button>
+            <button class="map-button is-active" type="button" data-action="memorypath-settings-save" ${this._pathwayDraftSending ? "disabled" : ""}>${this._pathwayDraftSending ? "Sending..." : "Save"}</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   _renderPathwayNameDialog() {
     if (!this._pathwayNameDialogOpen) {
       return "";
     }
 
     const isNoGoZone = this._pathwayDraftKind === "nogozone";
+    const isMemoryPath = this._pathwayDraftKind === "sidewalk";
+    const itemLabel = isNoGoZone ? "no-go zone" : isMemoryPath ? "memory path" : "pathway";
+    const shortLabel = isNoGoZone ? "zone" : "path";
+    const commandName = this._pathwayDraftCommandName();
     return `
       <div class="map-dialog-backdrop">
-        <div class="map-dialog" role="dialog" aria-modal="true" aria-label="Name ${isNoGoZone ? "no-go zone" : "pathway"}">
-          <div class="map-dialog-title">${this._pathwayNameDialogMode === "rename" ? `Rename this ${isNoGoZone ? "no-go zone" : "pathway"}` : `Name this ${isNoGoZone ? "no-go zone" : "pathway"}`}</div>
-          <div class="map-dialog-copy">Enter the ${isNoGoZone ? "zone" : "path"} name to include in the ${isNoGoZone ? "save_nogozone" : "save_pathway"} JSON.</div>
+        <div class="map-dialog" role="dialog" aria-modal="true" aria-label="Name ${itemLabel}">
+          <div class="map-dialog-title">${this._pathwayNameDialogMode === "rename" ? `Rename this ${itemLabel}` : `Name this ${itemLabel}`}</div>
+          <div class="map-dialog-copy">Enter the ${shortLabel} name to include in the ${commandName} JSON.</div>
           <input
             class="map-dialog-input"
             type="text"
             maxlength="80"
             value="${this._escape(this._pathwayDraftPendingName)}"
             data-action="pathway-name-input"
-            placeholder="${isNoGoZone ? "No-go zone name" : "Pathway name"}"
+            placeholder="${isNoGoZone ? "No-go zone name" : isMemoryPath ? "Memory path name" : "Pathway name"}"
           />
           <div class="map-dialog-actions">
             <button class="map-button" type="button" data-action="pathway-name-cancel" ${this._pathwayDraftSending ? "disabled" : ""}>Cancel</button>
@@ -2956,6 +3396,10 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     event.preventDefault();
+    if (this._isMemoryPathTrimmerEditActive()) {
+      return;
+    }
+
     if (event.ctrlKey) {
       return;
     }
@@ -2977,6 +3421,78 @@ class S2JYarboMapCard extends HTMLElement {
       localPoint,
     };
     this._render();
+  }
+
+  _handleKeyDown(event) {
+    if (event.key !== "Backspace" && event.key !== "Delete") {
+      return;
+    }
+
+    if (this._eventHasTextInputTarget(event)) {
+      return;
+    }
+
+    if (!this._handleEditorDeleteKey()) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  _isTextInputTarget(target) {
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+
+    const tagName = target.tagName.toLowerCase();
+    return (
+      target.isContentEditable
+      || tagName === "input"
+      || tagName === "textarea"
+      || tagName === "select"
+    );
+  }
+
+  _eventHasTextInputTarget(event) {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    if (path.some((target) => this._isTextInputTarget(target))) {
+      return true;
+    }
+    return this._isTextInputTarget(event.target);
+  }
+
+  _handleEditorDeleteKey() {
+    if (!this._editMode || this._pathwayDraftSending || !this._isDraftEditActive()) {
+      return false;
+    }
+
+    if (this._isMemoryPathTrimmerEditActive()) {
+      if (
+        this._selectedTrimmingSelectionKind !== "point"
+        || !Number.isInteger(this._selectedTrimmingEdgeIndex)
+        || !Number.isInteger(this._selectedTrimmingPointIndex)
+      ) {
+        return false;
+      }
+
+      const removed = this._removeMemoryPathTrimmingPoint(
+        this._selectedTrimmingEdgeIndex,
+        this._selectedTrimmingPointIndex,
+      );
+      if (removed) {
+        this._render();
+      }
+      return removed;
+    }
+
+    if (!Number.isInteger(this._selectedDraftPointIndex)) {
+      return false;
+    }
+
+    this._removePathwayDraftPoint(this._selectedDraftPointIndex);
+    this._render();
+    return true;
   }
 
   _handleBeforeUnload(event) {
@@ -3215,12 +3731,66 @@ class S2JYarboMapCard extends HTMLElement {
   _isDraftEditActive() {
     return (
       this._activeEditTool === "pa"
+      || this._activeEditTool === "mp"
       || this._activeEditTool === "pathway-edit"
       || this._activeEditTool === "pathway-move"
       || this._activeEditTool === "ng"
       || this._activeEditTool === "nogozone-edit"
       || this._activeEditTool === "nogozone-move"
     );
+  }
+
+  _canAddConnectedDraftPoint() {
+    return (
+      this._activeEditTool === "pa"
+      || this._activeEditTool === "mp"
+      || this._activeEditTool === "ng"
+      || this._activeEditTool === "pathway-edit"
+      || this._activeEditTool === "nogozone-edit"
+    );
+  }
+
+  _isMemoryPathTrimmerEditActive() {
+    return (
+      this._memoryPathTrimmerMode === true
+      && this._pathwayDraftKind === "sidewalk"
+      && this._isDraftEditActive()
+    );
+  }
+
+  _toggleMemoryPathTrimmerEdit() {
+    if (this._pathwayDraftKind !== "sidewalk" || !this._isDraftEditActive()) {
+      return;
+    }
+
+    if (this._pathwayDraftPoints.length < 2) {
+      this._pathwayDraftNotice = "Add at least two memory path points before editing trimmer segments.";
+      this._render();
+      return;
+    }
+
+    this._memoryPathTrimmerMode = !this._memoryPathTrimmerMode;
+    this._selectedDraftPointIndex = null;
+    this._selectedTrimmingEdgeIndex = null;
+    this._selectedTrimmingPointIndex = null;
+    this._selectedTrimmingSelectionKind = null;
+    this._editContextMenu = null;
+    this._pathwayDraftNotice = this._memoryPathTrimmerMode
+      ? "Trimmer editing enabled. Click trimmer points or lines to select. Hold Shift and click to add a snapped trimmer point."
+      : "Memory path point editing enabled.";
+    this._render();
+  }
+
+  _toggleMemoryPathAutoAddTrimmingEdges() {
+    if (this._pathwayDraftKind !== "sidewalk" || this._activeEditTool !== "mp") {
+      return;
+    }
+
+    this._memoryPathAutoAddTrimmingEdges = !this._memoryPathAutoAddTrimmingEdges;
+    this._pathwayDraftNotice = this._memoryPathAutoAddTrimmingEdges
+      ? "New memory path points will add a new trimmer section."
+      : "New memory path points will not add trimmer sections.";
+    this._render();
   }
 
   _pathwayDraftSignature() {
@@ -3237,6 +3807,18 @@ class S2JYarboMapCard extends HTMLElement {
       name: this._pathwayDraftName || "",
       enabled: this._pathwayDraftEnabled !== false,
       type: Number.isFinite(Number(this._pathwayDraftType)) ? Number(this._pathwayDraftType) : 0,
+      connectids: Array.isArray(this._pathwayDraftConnectIds) ? this._pathwayDraftConnectIds : [],
+      trimmingEdges: Array.isArray(this._pathwayDraftTrimmingEdges)
+        ? this._pathwayDraftTrimmingEdges.map((edge) => ({
+            id: edge?.id ?? null,
+            points: Array.isArray(edge?.points)
+              ? edge.points.map((point) => ({
+                  x: Number.isFinite(Number(point?.x)) ? Number(point.x) : null,
+                  y: Number.isFinite(Number(point?.y)) ? Number(point.y) : null,
+                }))
+              : [],
+          }))
+        : [],
       points,
     });
   }
@@ -3472,6 +4054,7 @@ class S2JYarboMapCard extends HTMLElement {
       this._pathwayDraftSending = false;
       this._pathwayDeleteDialogOpen = false;
       this._selectedPathwayKey = "";
+      this._selectedMemoryPathKey = "";
       this._selectedNoGoKey = "";
       this._pathwayDraftPoints = [];
       this._pathwayDraftJson = "";
@@ -3480,9 +4063,15 @@ class S2JYarboMapCard extends HTMLElement {
       this._pathwayDraftKind = "pathway";
       this._pathwayDraftEnabled = true;
       this._pathwayDraftType = 0;
+      this._pathwayDraftConnectIds = [];
+      this._pathwayDraftHeadType = 99;
+      this._pathwayDraftSnowPiles = [];
+      this._pathwayDraftTrimmingEdges = [];
+      this._pathwayDraftTrimmingEdgeAnchors = [];
       this._pathwayDraftPendingName = "";
       this._pathwayDraftOriginalSignature = "";
       this._editContextMenu = null;
+      this._memoryPathSettingsDialogOpen = false;
       this._unsavedChangesDialogOpen = false;
       this._unsavedChangesAction = null;
       this._unsavedChangesNavigationUrl = "";
@@ -3616,12 +4205,17 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     const noGoHit = this._nearestNoGoHit(event.currentTarget, event);
-    const pathwayHit = noGoHit ? null : this._nearestPathwayHit(event.currentTarget, event);
+    const memoryPathHit = noGoHit ? null : this._nearestMemoryPathHit(event.currentTarget, event);
+    const pathwayHit = noGoHit || memoryPathHit ? null : this._nearestPathwayHit(event.currentTarget, event);
     this._selectedPathwayKey = pathwayHit?.key || "";
+    this._selectedMemoryPathKey = memoryPathHit?.key || "";
     this._selectedNoGoKey = noGoHit?.key || "";
     this._pathwayDeleteDialogOpen = false;
+    this._memoryPathSettingsDialogOpen = false;
     this._pathwayDraftNotice = noGoHit
       ? `Selected no-go zone "${noGoHit.shape.name || noGoHit.shape.id || "Unnamed"}".`
+      : memoryPathHit
+        ? `Selected memory path "${memoryPathHit.shape.name || memoryPathHit.shape.id || "Unnamed"}".`
       : pathwayHit
         ? `Selected pathway "${pathwayHit.shape.name || pathwayHit.shape.id || "Unnamed"}".`
         : "No feature selected.";
@@ -3635,8 +4229,9 @@ class S2JYarboMapCard extends HTMLElement {
 
     const svg = event.currentTarget;
     const selectedPathway = this._selectedPathway();
-    const selectedNoGoZone = selectedPathway ? null : this._selectedNoGoZone();
-    if (!selectedPathway && !selectedNoGoZone) {
+    const selectedMemoryPath = selectedPathway ? null : this._selectedMemoryPath();
+    const selectedNoGoZone = selectedPathway || selectedMemoryPath ? null : this._selectedNoGoZone();
+    if (!selectedPathway && !selectedMemoryPath && !selectedNoGoZone) {
       return false;
     }
 
@@ -3652,6 +4247,13 @@ class S2JYarboMapCard extends HTMLElement {
       }
 
       this._prepareSelectedPathwayMove(selectedPathway);
+    } else if (selectedMemoryPath) {
+      const hit = this._nearestMemoryPathHit(svg, event);
+      if (!hit || hit.key !== this._selectedMemoryPathKey) {
+        return false;
+      }
+
+      this._prepareSelectedMemoryPathMove(selectedMemoryPath);
     } else {
       const hit = this._nearestNoGoHit(svg, event);
       if (!hit || hit.key !== this._selectedNoGoKey) {
@@ -3682,6 +4284,10 @@ class S2JYarboMapCard extends HTMLElement {
       pointerId: event.pointerId,
       startPoint: resolvedStartPoint,
       startPoints: this._pathwayDraftPoints.map((point) => ({ ...point })),
+      startTrimmingEdges: this._pathwayDraftTrimmingEdges.map((edge) => ({
+        ...edge,
+        points: Array.isArray(edge.points) ? edge.points.map((point) => ({ ...point })) : [],
+      })),
       dragged: false,
       svg: event.currentTarget,
     };
@@ -3702,11 +4308,24 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftName = selectedPathway.name || "Pathway Draft";
     this._pathwayDraftEnabled = true;
     this._pathwayDraftType = 0;
+    this._resetMemoryPathDraftDetails();
     this._pathwayDraftPoints = selectedPathway.points.map((point) => ({ ...point }));
     this._pathwayDraftJson = this._buildPathwayDraftJson();
     this._markPathwayDraftClean();
     this._pathwayDraftNotice =
       "Moving selected pathway. Release, then click tick to save or cross to cancel.";
+  }
+
+  _prepareSelectedMemoryPathMove(selectedMemoryPath) {
+    this._activeEditTool = "pathway-move";
+    this._editToolsExpanded = false;
+    this._pathwayDeleteDialogOpen = false;
+    this._memoryPathSettingsDialogOpen = false;
+    this._pathwayNameDialogOpen = false;
+    this._setMemoryPathDraftFromShape(selectedMemoryPath);
+    this._markPathwayDraftClean();
+    this._pathwayDraftNotice =
+      "Moving selected memory path. Release, then click tick to save or cross to cancel.";
   }
 
   _prepareSelectedNoGoZoneMove(selectedNoGoZone) {
@@ -3721,6 +4340,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftType = Number.isFinite(Number(selectedNoGoZone.type))
       ? Number(selectedNoGoZone.type)
       : 0;
+    this._resetMemoryPathDraftDetails();
     this._pathwayDraftPoints = this._editableClosedShapePoints(selectedNoGoZone.points);
     this._pathwayDraftJson = this._buildPathwayDraftJson();
     this._markPathwayDraftClean();
@@ -3740,6 +4360,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftName = selectedPathway.name || "Pathway Draft";
     this._pathwayDraftEnabled = true;
     this._pathwayDraftType = 0;
+    this._resetMemoryPathDraftDetails();
     this._pathwayDraftPoints = selectedPathway.points.map((point) => ({ ...point }));
     this._pathwayDraftJson = this._buildPathwayDraftJson();
     this._markPathwayDraftClean();
@@ -3759,6 +4380,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftName = selectedPathway.name || "Pathway Draft";
     this._pathwayDraftEnabled = true;
     this._pathwayDraftType = 0;
+    this._resetMemoryPathDraftDetails();
     this._pathwayDraftPoints = selectedPathway.points.map((point) => ({ ...point }));
     this._pathwayDraftJson = this._buildPathwayDraftJson();
     this._markPathwayDraftClean();
@@ -3774,6 +4396,67 @@ class S2JYarboMapCard extends HTMLElement {
       return;
     }
 
+    this._pathwayDeleteDialogOpen = true;
+    this._render();
+  }
+
+  _beginSelectedMemoryPathEdit() {
+    const selectedMemoryPath = this._selectedMemoryPath();
+    if (!selectedMemoryPath) {
+      return;
+    }
+
+    this._activeEditTool = "pathway-edit";
+    this._setMemoryPathDraftFromShape(selectedMemoryPath);
+    this._markPathwayDraftClean();
+    this._pathwayDraftNotice =
+      "Drag memory path points to move them. Click a point to delete it. Click a line to insert a new point.";
+    this._render();
+  }
+
+  _beginSelectedMemoryPathRename() {
+    const selectedMemoryPath = this._selectedMemoryPath();
+    if (!selectedMemoryPath) {
+      return;
+    }
+
+    this._setMemoryPathDraftFromShape(selectedMemoryPath);
+    this._markPathwayDraftClean();
+    this._pathwayDraftPendingName = this._pathwayDraftName;
+    this._pathwayNameDialogMode = "rename";
+    this._pathwayNameDialogOpen = true;
+    this._pathwayDeleteDialogOpen = false;
+    this._memoryPathSettingsDialogOpen = false;
+    this._render();
+  }
+
+  _beginSelectedMemoryPathSettings() {
+    const selectedMemoryPath = this._selectedMemoryPath();
+    if (!selectedMemoryPath) {
+      return;
+    }
+
+    this._memoryPathSettings = {
+      en_blade: selectedMemoryPath.en_blade !== false,
+      blade_height: Number.isFinite(Number(selectedMemoryPath.blade_height))
+        ? Number(selectedMemoryPath.blade_height)
+        : 0,
+      plan_speed: Number.isFinite(Number(selectedMemoryPath.plan_speed))
+        ? Number(selectedMemoryPath.plan_speed)
+        : 0.5,
+    };
+    this._pathwayDeleteDialogOpen = false;
+    this._pathwayNameDialogOpen = false;
+    this._memoryPathSettingsDialogOpen = true;
+    this._render();
+  }
+
+  _beginSelectedMemoryPathDelete() {
+    if (!this._selectedMemoryPath()) {
+      return;
+    }
+
+    this._memoryPathSettingsDialogOpen = false;
     this._pathwayDeleteDialogOpen = true;
     this._render();
   }
@@ -3837,8 +4520,10 @@ class S2JYarboMapCard extends HTMLElement {
     this._editContextMenu = null;
     this._editToolsExpanded = false;
     this._selectedPathwayKey = "";
+    this._selectedMemoryPathKey = "";
     this._selectedNoGoKey = "";
     this._pathwayDeleteDialogOpen = false;
+    this._memoryPathSettingsDialogOpen = false;
     this._pathwayNameDialogMode = "create";
     this._pathwayDraftKind = "nogozone";
     this._pathwayDraftPoints = [];
@@ -3847,6 +4532,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftId = null;
     this._pathwayDraftEnabled = true;
     this._pathwayDraftType = 0;
+    this._resetMemoryPathDraftDetails();
     this._pathwayDraftPendingName = "";
     this._pathwayNameDialogOpen = false;
     this._pathwayDraftSending = false;
@@ -3861,8 +4547,10 @@ class S2JYarboMapCard extends HTMLElement {
     this._editContextMenu = null;
     this._editToolsExpanded = false;
     this._selectedPathwayKey = "";
+    this._selectedMemoryPathKey = "";
     this._selectedNoGoKey = "";
     this._pathwayDeleteDialogOpen = false;
+    this._memoryPathSettingsDialogOpen = false;
     this._pathwayNameDialogMode = "create";
     this._pathwayDraftKind = "pathway";
     this._pathwayDraftPoints = [];
@@ -3871,6 +4559,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftId = null;
     this._pathwayDraftEnabled = true;
     this._pathwayDraftType = 0;
+    this._resetMemoryPathDraftDetails();
     this._pathwayDraftPendingName = "";
     this._pathwayNameDialogOpen = false;
     this._pathwayDraftSending = false;
@@ -3880,10 +4569,40 @@ class S2JYarboMapCard extends HTMLElement {
     this._render();
   }
 
+  _beginMemoryPathDraftSession() {
+    this._activeEditTool = "mp";
+    this._editContextMenu = null;
+    this._editToolsExpanded = false;
+    this._selectedPathwayKey = "";
+    this._selectedMemoryPathKey = "";
+    this._selectedNoGoKey = "";
+    this._pathwayDeleteDialogOpen = false;
+    this._memoryPathSettingsDialogOpen = false;
+    this._pathwayNameDialogMode = "create";
+    this._pathwayDraftKind = "sidewalk";
+    this._pathwayDraftPoints = [];
+    this._pathwayDraftJson = "";
+    this._pathwayDraftName = "";
+    this._pathwayDraftId = null;
+    this._pathwayDraftEnabled = true;
+    this._pathwayDraftType = 0;
+    this._resetMemoryPathDraftDetails();
+    this._pathwayDraftPendingName = "";
+    this._pathwayNameDialogOpen = false;
+    this._pathwayDraftSending = false;
+    this._markPathwayDraftClean();
+    this._memoryPathAutoAddTrimmingEdges = true;
+    this._pathwayDraftNotice =
+      "Click on the map to add memory path points. Use Trimmer On to add right-side trimmer sections. Hold Shift and drag to pan.";
+    this._render();
+  }
+
   _acceptPathwayDraft() {
     const isNoGoZone = this._pathwayDraftKind === "nogozone";
+    const isMemoryPath = this._pathwayDraftKind === "sidewalk";
     if (
       this._activeEditTool !== "pa"
+      && this._activeEditTool !== "mp"
       && this._activeEditTool !== "pathway-edit"
       && this._activeEditTool !== "pathway-move"
       && this._activeEditTool !== "ng"
@@ -3899,7 +4618,9 @@ class S2JYarboMapCard extends HTMLElement {
       this._clearPendingUnsavedSaveAction();
       this._pathwayDraftNotice = isNoGoZone
         ? "Add at least three no-go zone points before confirming."
-        : "Add at least two pathway points before confirming.";
+        : isMemoryPath
+          ? "Add at least two memory path points before confirming."
+          : "Add at least two pathway points before confirming.";
       this._render();
       return;
     }
@@ -3914,7 +4635,7 @@ class S2JYarboMapCard extends HTMLElement {
       return;
     }
 
-    this._pathwayDraftPendingName = this._pathwayDraftName || (isNoGoZone ? "No-go Zone" : "Pathway Draft");
+    this._pathwayDraftPendingName = this._pathwayDraftName || (isNoGoZone ? "No-go Zone" : isMemoryPath ? "Memory Path" : "Pathway Draft");
     this._pathwayNameDialogMode = "create";
     this._pathwayNameDialogOpen = true;
     this._pathwayDraftSending = false;
@@ -3924,6 +4645,7 @@ class S2JYarboMapCard extends HTMLElement {
   _cancelPathwayDraft() {
     if (
       this._activeEditTool !== "pa"
+      && this._activeEditTool !== "mp"
       && this._activeEditTool !== "pathway-edit"
       && this._activeEditTool !== "pathway-move"
       && this._activeEditTool !== "ng"
@@ -3943,6 +4665,7 @@ class S2JYarboMapCard extends HTMLElement {
       requestFreshMap = true,
     } = options;
     const isNoGoZone = this._pathwayDraftKind === "nogozone";
+    const isMemoryPath = this._pathwayDraftKind === "sidewalk";
     this._editContextMenu = null;
     this._unsavedChangesDialogOpen = false;
     this._unsavedChangesAction = null;
@@ -3956,13 +4679,14 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftKind = "pathway";
     this._pathwayDraftEnabled = true;
     this._pathwayDraftType = 0;
+    this._resetMemoryPathDraftDetails();
     this._pathwayDraftPendingName = "";
     this._pathwayDraftOriginalSignature = "";
     this._pathwayNameDialogOpen = false;
     this._pathwayDraftSending = false;
     this._pathwayNameDialogMode = "create";
     if (notice) {
-      this._pathwayDraftNotice = `${isNoGoZone ? "No-go zone" : "Pathway"} draft cancelled.`;
+      this._pathwayDraftNotice = `${isNoGoZone ? "No-go zone" : isMemoryPath ? "Memory path" : "Pathway"} draft cancelled.`;
     }
     this._activeEditTool = null;
     if (render) {
@@ -3983,12 +4707,56 @@ class S2JYarboMapCard extends HTMLElement {
       return;
     }
 
+    const nextPointIndex = this._pathwayDraftPoints.length;
     this._pathwayDraftPoints = [...this._pathwayDraftPoints, localPoint];
+    this._selectedDraftPointIndex = nextPointIndex;
+    if (this._shouldAutoAddMemoryPathTrimmingEdge()) {
+      this._addMemoryPathTrimmingEdgeForCenterPoint(nextPointIndex);
+    }
     this._pathwayDraftJson = this._buildPathwayDraftJson();
     this._pathwayDraftNotice = this._pathwayDraftKind === "nogozone"
       ? "No-go zone point added. The boundary closes automatically. Hold Shift and drag to pan."
+      : this._pathwayDraftKind === "sidewalk"
+        ? "Memory path point added. Trimmer sections follow the Trimmer On/Off control."
       : "Ready to send. While in edit mode, hold Shift and drag to pan.";
     this._render();
+  }
+
+  _handleConnectedPathwayDraftClick(event) {
+    if (!(event.currentTarget instanceof SVGSVGElement) || event.button !== 0) {
+      return false;
+    }
+
+    const localPoint = this._localPointFromSvgEvent(event.currentTarget, event);
+    if (!localPoint) {
+      return false;
+    }
+
+    const points = Array.isArray(this._pathwayDraftPoints) ? this._pathwayDraftPoints : [];
+    const selectedIndex = Number.isInteger(this._selectedDraftPointIndex)
+      && this._selectedDraftPointIndex >= 0
+      && this._selectedDraftPointIndex < points.length
+        ? this._selectedDraftPointIndex
+        : null;
+    const insertedPointIndex = selectedIndex === null ? points.length : selectedIndex + 1;
+    const nextPoints = [...points];
+    nextPoints.splice(insertedPointIndex, 0, localPoint);
+    this._pathwayDraftPoints = nextPoints;
+    this._selectedDraftPointIndex = insertedPointIndex;
+    if (this._shouldAutoAddMemoryPathTrimmingEdge()) {
+      this._addMemoryPathTrimmingEdgeForCenterPoint(insertedPointIndex);
+    }
+    this._pathwayDraftJson = this._buildPathwayDraftJson();
+    const connectionTarget = selectedIndex === null
+      ? points.length ? "last point" : "end of the draft"
+      : "selected point";
+    this._pathwayDraftNotice = this._pathwayDraftKind === "nogozone"
+      ? `No-go zone point added after the ${connectionTarget}.`
+      : this._pathwayDraftKind === "sidewalk"
+        ? `Memory path point added after the ${connectionTarget}.`
+        : `Pathway point added after the ${connectionTarget}.`;
+    this._render();
+    return true;
   }
 
   _handleExistingPathwayEditClick(event) {
@@ -4007,11 +4775,18 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     const nextPoints = [...this._pathwayDraftPoints];
-    nextPoints.splice(segmentIndex + 1, 0, localPoint);
+    const insertedPointIndex = segmentIndex + 1;
+    nextPoints.splice(insertedPointIndex, 0, localPoint);
     this._pathwayDraftPoints = nextPoints;
+    this._selectedDraftPointIndex = insertedPointIndex;
+    if (this._shouldAutoAddMemoryPathTrimmingEdge()) {
+      this._addMemoryPathTrimmingEdgeForCenterPoint(insertedPointIndex);
+    }
     this._pathwayDraftJson = this._buildPathwayDraftJson();
     this._pathwayDraftNotice = this._pathwayDraftKind === "nogozone"
       ? "Point inserted on no-go zone."
+      : this._pathwayDraftKind === "sidewalk"
+        ? "Point inserted on memory path."
       : "Point inserted on pathway.";
     this._render();
     return true;
@@ -4038,6 +4813,50 @@ class S2JYarboMapCard extends HTMLElement {
       kind: "pathway-point",
       pointerId: event.pointerId,
       pointIndex,
+      startPoints: this._pathwayDraftPoints.map((point) => ({ ...point })),
+      startTrimmingEdges: this._pathwayDraftTrimmingEdges.map((edge) => ({
+        ...edge,
+        points: Array.isArray(edge.points) ? edge.points.map((point) => ({ ...point })) : [],
+      })),
+      dragged: false,
+      svg: event.currentTarget,
+    };
+    this._selectedDraftPointIndex = pointIndex;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    window.addEventListener("pointermove", this._handlePointerMove);
+    window.addEventListener("pointerup", this._handlePointerUp);
+    window.addEventListener("pointercancel", this._handlePointerUp);
+    return true;
+  }
+
+  _startMemoryPathTrimmerPointDrag(event) {
+    if (!(event.currentTarget instanceof SVGSVGElement) || event.button !== 0) {
+      return false;
+    }
+
+    const localPoint = this._localPointFromSvgEvent(event.currentTarget, event);
+    if (!localPoint) {
+      return false;
+    }
+
+    const hit = this._nearestMemoryPathTrimmingPointHit(localPoint);
+    if (!hit) {
+      return false;
+    }
+
+    event.preventDefault();
+    this._clearActiveDrag();
+    const wasSelected = hit.edgeIndex === this._selectedTrimmingEdgeIndex
+      && hit.pointIndex === this._selectedTrimmingPointIndex;
+    this._selectedTrimmingEdgeIndex = hit.edgeIndex;
+    this._selectedTrimmingPointIndex = hit.pointIndex;
+    this._selectedTrimmingSelectionKind = "point";
+    this._activeDrag = {
+      kind: "trimmer-point",
+      pointerId: event.pointerId,
+      edgeIndex: hit.edgeIndex,
+      pointIndex: hit.pointIndex,
+      wasSelected,
       dragged: false,
       svg: event.currentTarget,
     };
@@ -4045,6 +4864,122 @@ class S2JYarboMapCard extends HTMLElement {
     window.addEventListener("pointermove", this._handlePointerMove);
     window.addEventListener("pointerup", this._handlePointerUp);
     window.addEventListener("pointercancel", this._handlePointerUp);
+    return true;
+  }
+
+  _handleMemoryPathTrimmerPointerDown(event) {
+    if (!(event.currentTarget instanceof SVGSVGElement) || event.button !== 0) {
+      return false;
+    }
+
+    if (event.shiftKey) {
+      return this._handleMemoryPathTrimmerCanvasClick(event);
+    }
+
+    if (this._startMemoryPathTrimmerPointDrag(event)) {
+      return true;
+    }
+
+    const localPoint = this._localPointFromSvgEvent(event.currentTarget, event);
+    if (!localPoint) {
+      return false;
+    }
+
+    const lineHit = this._nearestMemoryPathTrimmingSegmentHit(localPoint);
+    if (lineHit) {
+      event.preventDefault();
+      this._selectedTrimmingEdgeIndex = lineHit.edgeIndex;
+      this._selectedTrimmingPointIndex = lineHit.segmentIndex;
+      this._selectedTrimmingSelectionKind = "segment";
+      this._pathwayDraftNotice = `Selected trimmer segment ${lineHit.edgeIndex + 1}. Hold Shift and click to add a snapped point.`;
+      this._render();
+      return true;
+    }
+
+    const edgeHit = this._nearestMemoryPathRightEdgeHit(localPoint);
+    if (!edgeHit) {
+      event.preventDefault();
+      this._selectedTrimmingEdgeIndex = null;
+      this._selectedTrimmingPointIndex = null;
+      this._selectedTrimmingSelectionKind = null;
+      this._pathwayDraftNotice = "Trimmer segment unselected.";
+      this._render();
+      return true;
+    }
+
+    return false;
+  }
+
+  _handleMemoryPathTrimmerCanvasClick(event) {
+    if (!(event.currentTarget instanceof SVGSVGElement) || event.button !== 0) {
+      return false;
+    }
+
+    const localPoint = this._localPointFromSvgEvent(event.currentTarget, event);
+    const snappedPoint = localPoint ? this._snapMemoryPathTrimmerPoint(localPoint) : null;
+    if (!snappedPoint) {
+      this._pathwayDraftNotice = "Hold Shift near the sidewalk edge to add trimmer points.";
+      this._render();
+      return false;
+    }
+
+    event.preventDefault();
+    const lineHit = this._nearestMemoryPathTrimmingSegmentHit(localPoint);
+    let edgeIndex = Number.isInteger(this._selectedTrimmingEdgeIndex)
+      ? this._selectedTrimmingEdgeIndex
+      : -1;
+    let insertIndex = Number.isInteger(this._selectedTrimmingPointIndex)
+      ? this._selectedTrimmingSelectionKind === "segment"
+        ? this._selectedTrimmingPointIndex + 1
+        : this._selectedTrimmingPointIndex + 1
+      : null;
+
+    if (lineHit) {
+      edgeIndex = lineHit.edgeIndex;
+      insertIndex = lineHit.segmentIndex + 1;
+    }
+
+    if (edgeIndex < 0 || edgeIndex >= this._pathwayDraftTrimmingEdges.length) {
+      edgeIndex = this._pathwayDraftTrimmingEdges.length;
+      this._pathwayDraftTrimmingEdges = [
+        ...this._pathwayDraftTrimmingEdges,
+        {
+          id: this._nextMemoryPathTrimmingEdgeId(),
+          ref: {
+            latitude: 0.0,
+            longitude: 0.0,
+          },
+          points: [],
+        },
+      ];
+      insertIndex = 0;
+    }
+
+    const nextEdges = this._pathwayDraftTrimmingEdges.map((edge, index) => {
+      if (index !== edgeIndex) {
+        return edge;
+      }
+
+      const points = Array.isArray(edge.points) ? [...edge.points] : [];
+      const safeInsertIndex = insertIndex === null
+        ? points.length
+        : Math.max(0, Math.min(points.length, insertIndex));
+      points.splice(safeInsertIndex, 0, snappedPoint);
+      this._selectedTrimmingPointIndex = safeInsertIndex;
+      this._selectedTrimmingSelectionKind = "point";
+      return {
+        ...edge,
+        points,
+      };
+    });
+
+    this._pathwayDraftTrimmingEdges = nextEdges;
+    this._selectedTrimmingEdgeIndex = edgeIndex;
+    this._pathwayDraftTrimmingEdgeAnchors =
+      this._memoryPathTrimmingEdgeAnchors(this._pathwayDraftPoints, this._pathwayDraftTrimmingEdges);
+    this._pathwayDraftJson = this._buildPathwayDraftJson();
+    this._pathwayDraftNotice = `Trimmer point added to segment ${edgeIndex + 1}.`;
+    this._render();
     return true;
   }
 
@@ -4057,10 +4992,17 @@ class S2JYarboMapCard extends HTMLElement {
     const nextPoints = [...this._pathwayDraftPoints];
     nextPoints.splice(pointIndex, 1);
     this._pathwayDraftPoints = nextPoints;
+    this._selectedDraftPointIndex = nextPoints.length
+      ? Math.min(pointIndex, nextPoints.length - 1)
+      : null;
+    if (this._pathwayDraftKind === "sidewalk") {
+      this._pathwayDraftTrimmingEdgeAnchors =
+        this._memoryPathTrimmingEdgeAnchors(this._pathwayDraftPoints, this._pathwayDraftTrimmingEdges);
+    }
     this._pathwayDraftJson = this._buildPathwayDraftJson();
     this._pathwayDraftNotice =
       nextPoints.length >= minimumPoints
-        ? `Point removed from ${this._pathwayDraftKind === "nogozone" ? "no-go zone" : "pathway"}.`
+        ? `Point removed from ${this._pathwayDraftKind === "nogozone" ? "no-go zone" : this._pathwayDraftKind === "sidewalk" ? "memory path" : "pathway"}.`
         : `Point removed. Add at least ${minimumPoints} points before confirming.`;
   }
 
@@ -4075,6 +5017,143 @@ class S2JYarboMapCard extends HTMLElement {
       }
     }
     return bestIndex;
+  }
+
+  _nearestMemoryPathTrimmingPointHit(localPoint, tolerance = 0.35) {
+    let bestHit = null;
+    for (const [edgeIndex, edge] of this._pathwayDraftTrimmingEdges.entries()) {
+      const points = Array.isArray(edge?.points) ? edge.points : [];
+      for (const [pointIndex, point] of points.entries()) {
+        const distance = Math.hypot(
+          Number(point.x) - Number(localPoint.x),
+          Number(point.y) - Number(localPoint.y),
+        );
+        if (distance <= tolerance && (!bestHit || distance < bestHit.distance)) {
+          bestHit = {
+            edgeIndex,
+            pointIndex,
+            distance,
+          };
+        }
+      }
+    }
+    return bestHit;
+  }
+
+  _nearestMemoryPathTrimmingSegmentHit(localPoint, tolerance = 0.35) {
+    let bestHit = null;
+    for (const [edgeIndex, edge] of this._pathwayDraftTrimmingEdges.entries()) {
+      const points = Array.isArray(edge?.points) ? edge.points : [];
+      for (let segmentIndex = 0; segmentIndex < points.length - 1; segmentIndex += 1) {
+        const distance = this._distancePointToSegment(
+          localPoint,
+          points[segmentIndex],
+          points[segmentIndex + 1],
+        );
+        if (distance <= tolerance && (!bestHit || distance < bestHit.distance)) {
+          bestHit = {
+            edgeIndex,
+            segmentIndex,
+            distance,
+          };
+        }
+      }
+    }
+    return bestHit;
+  }
+
+  _nearestMemoryPathRightEdgeHit(localPoint, tolerance = 0.45) {
+    const points = this._memoryPathRightEdgeFromPoints(this._pathwayDraftPoints);
+    if (points.length < 2) {
+      return null;
+    }
+
+    let bestHit = null;
+    for (let segmentIndex = 0; segmentIndex < points.length - 1; segmentIndex += 1) {
+      const distance = this._distancePointToSegment(
+        localPoint,
+        points[segmentIndex],
+        points[segmentIndex + 1],
+      );
+      if (distance <= tolerance && (!bestHit || distance < bestHit.distance)) {
+        bestHit = {
+          segmentIndex,
+          distance,
+        };
+      }
+    }
+    return bestHit;
+  }
+
+  _updateMemoryPathTrimmingPoint(edgeIndex, pointIndex, point) {
+    if (
+      edgeIndex < 0
+      || pointIndex < 0
+      || edgeIndex >= this._pathwayDraftTrimmingEdges.length
+    ) {
+      return false;
+    }
+
+    const edge = this._pathwayDraftTrimmingEdges[edgeIndex];
+    const points = Array.isArray(edge?.points) ? [...edge.points] : [];
+    if (pointIndex >= points.length) {
+      return false;
+    }
+
+    points[pointIndex] = point;
+    this._pathwayDraftTrimmingEdges = this._pathwayDraftTrimmingEdges.map((candidate, index) =>
+      index === edgeIndex
+        ? {
+            ...candidate,
+            points,
+          }
+        : candidate,
+    );
+    return true;
+  }
+
+  _removeMemoryPathTrimmingPoint(edgeIndex, pointIndex) {
+    if (
+      edgeIndex < 0
+      || pointIndex < 0
+      || edgeIndex >= this._pathwayDraftTrimmingEdges.length
+    ) {
+      return false;
+    }
+
+    const nextEdges = this._pathwayDraftTrimmingEdges
+      .map((edge, index) => {
+        if (index !== edgeIndex) {
+          return edge;
+        }
+
+        const points = Array.isArray(edge.points) ? [...edge.points] : [];
+        points.splice(pointIndex, 1);
+        return {
+          ...edge,
+          points,
+        };
+      })
+      .filter((edge) => Array.isArray(edge.points) && edge.points.length > 0);
+
+    this._pathwayDraftTrimmingEdges = nextEdges;
+    if (edgeIndex >= nextEdges.length) {
+      this._selectedTrimmingEdgeIndex = nextEdges.length ? nextEdges.length - 1 : null;
+      this._selectedTrimmingPointIndex = null;
+      this._selectedTrimmingSelectionKind = null;
+    } else {
+      this._selectedTrimmingEdgeIndex = edgeIndex;
+      const pointCount = nextEdges[edgeIndex]?.points?.length || 0;
+      this._selectedTrimmingPointIndex = pointCount
+        ? Math.min(pointIndex, pointCount - 1)
+        : null;
+      this._selectedTrimmingSelectionKind = pointCount ? "point" : null;
+    }
+    this._pathwayDraftTrimmingEdgeAnchors =
+      this._memoryPathTrimmingEdgeAnchors(this._pathwayDraftPoints, this._pathwayDraftTrimmingEdges);
+    this._pathwayDraftJson = this._buildPathwayDraftJson();
+    this._pathwayDraftNotice = "Trimmer point removed.";
+    return true;
   }
 
   _nearestDraftSegmentIndex(localPoint, tolerance = 0.5) {
@@ -4130,6 +5209,31 @@ class S2JYarboMapCard extends HTMLElement {
         if (distance <= tolerance && (!bestHit || distance < bestHit.distance)) {
           bestHit = {
             key: this._pathwayKey(shape, index),
+            shape,
+            distance,
+            segmentIndex,
+          };
+        }
+      }
+    }
+
+    return bestHit;
+  }
+
+  _nearestMemoryPathHit(svg, event, tolerance = 0.5) {
+    const localPoint = this._localPointFromSvgEvent(svg, event);
+    if (!localPoint) {
+      return null;
+    }
+
+    let bestHit = null;
+    for (const [index, shape] of this._siteMemoryPaths().entries()) {
+      const points = Array.isArray(shape?.points) ? shape.points : [];
+      for (let segmentIndex = 0; segmentIndex < points.length - 1; segmentIndex += 1) {
+        const distance = this._distancePointToSegment(localPoint, points[segmentIndex], points[segmentIndex + 1]);
+        if (distance <= tolerance && (!bestHit || distance < bestHit.distance)) {
+          bestHit = {
+            key: this._memoryPathKey(shape, index),
             shape,
             distance,
             segmentIndex,
@@ -4247,9 +5351,11 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     const isNoGoZone = this._pathwayDraftKind === "nogozone";
+    const isMemoryPath = this._pathwayDraftKind === "sidewalk";
+    const range = this._pathwayDraftRange();
     const payload = isNoGoZone
       ? {
-          range: this._pathwayDraftRange(),
+          range,
           ref: {
             latitude: reference.latitude,
             longitude: reference.longitude,
@@ -4259,11 +5365,26 @@ class S2JYarboMapCard extends HTMLElement {
           enable: this._pathwayDraftEnabled !== false,
           trimming_edges: [],
         }
+      : isMemoryPath
+        ? {
+            connectids: Array.isArray(this._pathwayDraftConnectIds) ? this._pathwayDraftConnectIds : [],
+            head_type: Number.isFinite(Number(this._pathwayDraftHeadType))
+              ? Number(this._pathwayDraftHeadType)
+              : 99,
+            name: this._pathwayDraftName || "Memory Path",
+            range,
+            ref: {
+              latitude: reference.latitude,
+              longitude: reference.longitude,
+            },
+            snowPiles: Array.isArray(this._pathwayDraftSnowPiles) ? this._pathwayDraftSnowPiles : [],
+            trimming_edges: this._memoryPathTrimmingEdges(range),
+          }
       : {
           connectids: [],
           leaf_piles: [],
           name: this._pathwayDraftName || "Pathway Draft",
-          range: this._pathwayDraftRange(),
+          range,
           ref: {
             latitude: reference.latitude,
             longitude: reference.longitude,
@@ -4288,13 +5409,35 @@ class S2JYarboMapCard extends HTMLElement {
     this._render();
   }
 
+  _pathwayDraftCommandName() {
+    if (this._pathwayDraftKind === "nogozone") {
+      return "save_nogozone";
+    }
+    if (this._pathwayDraftKind === "sidewalk") {
+      return "save_sidewalk";
+    }
+    return "save_pathway";
+  }
+
+  _pathwayDraftSaveApiPath() {
+    if (this._pathwayDraftKind === "nogozone") {
+      return "s2jyarbo/save_nogozone";
+    }
+    if (this._pathwayDraftKind === "sidewalk") {
+      return "s2jyarbo/save_sidewalk";
+    }
+    return "s2jyarbo/save_pathway";
+  }
+
   async _confirmPathwayDraftName() {
     if (!this._pathwayNameDialogOpen || this._pathwayDraftSending) {
       return;
     }
 
     this._pathwayDraftName = (this._pathwayDraftPendingName || "").trim() || "Pathway Draft";
-    if (this._pathwayDraftKind === "nogozone" && !(this._pathwayDraftPendingName || "").trim()) {
+    if (this._pathwayDraftKind === "sidewalk" && !(this._pathwayDraftPendingName || "").trim()) {
+      this._pathwayDraftName = "Memory Path";
+    } else if (this._pathwayDraftKind === "nogozone" && !(this._pathwayDraftPendingName || "").trim()) {
       this._pathwayDraftName = "No-go Zone";
     }
     this._pathwayDraftJson = this._buildPathwayDraftJson();
@@ -4310,7 +5453,7 @@ class S2JYarboMapCard extends HTMLElement {
 
     if (!this._hass || !this._entry?.entry_id) {
       this._clearPendingUnsavedSaveAction();
-      this._pathwayDraftNotice = `Home Assistant is not ready to send ${this._pathwayDraftKind === "nogozone" ? "save_nogozone" : "save_pathway"}.`;
+      this._pathwayDraftNotice = `Home Assistant is not ready to send ${this._pathwayDraftCommandName()}.`;
       this._render();
       return;
     }
@@ -4319,9 +5462,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._render();
 
     try {
-      const apiPath = this._pathwayDraftKind === "nogozone"
-        ? "s2jyarbo/save_nogozone"
-        : "s2jyarbo/save_pathway";
+      const apiPath = this._pathwayDraftSaveApiPath();
       const response = await this._hass.callApi("POST", apiPath, {
         entry_id: this._entry.entry_id,
         payload: commandPayload,
@@ -4333,16 +5474,17 @@ class S2JYarboMapCard extends HTMLElement {
       this._pathwayNameDialogOpen = false;
       this._pathwayNameDialogMode = "create";
       this._selectedPathwayKey = "";
+      this._selectedMemoryPathKey = "";
       this._selectedNoGoKey = "";
       this._pathwayDraftNotice =
-        `${this._pathwayDraftKind === "nogozone" ? "save_nogozone" : "save_pathway"} sent as "${this._pathwayDraftName}" via ${topic}.`;
+        `${this._pathwayDraftCommandName()} sent as "${this._pathwayDraftName}" via ${topic}.`;
       this._activeEditTool = null;
       void this._requestFreshMapAfterEdit();
       this._completePendingUnsavedSaveAction();
     } catch (err) {
       this._clearPendingUnsavedSaveAction();
       const message = err instanceof Error ? err.message : String(err);
-      this._pathwayDraftNotice = `${this._pathwayDraftKind === "nogozone" ? "save_nogozone" : "save_pathway"} failed: ${message}`;
+      this._pathwayDraftNotice = `${this._pathwayDraftCommandName()} failed: ${message}`;
     } finally {
       this._pathwayDraftSending = false;
       this._render();
@@ -4352,7 +5494,7 @@ class S2JYarboMapCard extends HTMLElement {
   async _saveEditedPathway() {
     if (!this._hass || !this._entry?.entry_id) {
       this._clearPendingUnsavedSaveAction();
-      this._pathwayDraftNotice = `Home Assistant is not ready to save the edited ${this._pathwayDraftKind === "nogozone" ? "no-go zone" : "pathway"}.`;
+      this._pathwayDraftNotice = `Home Assistant is not ready to save the edited ${this._pathwayDraftKind === "nogozone" ? "no-go zone" : this._pathwayDraftKind === "sidewalk" ? "memory path" : "pathway"}.`;
       this._render();
       return;
     }
@@ -4363,7 +5505,7 @@ class S2JYarboMapCard extends HTMLElement {
       commandPayload = JSON.parse(this._pathwayDraftJson);
     } catch (_err) {
       this._clearPendingUnsavedSaveAction();
-      this._pathwayDraftNotice = `Edited ${this._pathwayDraftKind === "nogozone" ? "no-go zone" : "pathway"} JSON is invalid and could not be sent.`;
+      this._pathwayDraftNotice = `Edited ${this._pathwayDraftKind === "nogozone" ? "no-go zone" : this._pathwayDraftKind === "sidewalk" ? "memory path" : "pathway"} JSON is invalid and could not be sent.`;
       this._render();
       return;
     }
@@ -4371,9 +5513,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._pathwayDraftSending = true;
     this._render();
     try {
-      const apiPath = this._pathwayDraftKind === "nogozone"
-        ? "s2jyarbo/save_nogozone"
-        : "s2jyarbo/save_pathway";
+      const apiPath = this._pathwayDraftSaveApiPath();
       const response = await this._hass.callApi("POST", apiPath, {
         entry_id: this._entry.entry_id,
         payload: commandPayload,
@@ -4383,16 +5523,17 @@ class S2JYarboMapCard extends HTMLElement {
       this._pathwayDraftPoints = [];
       this._pathwayDraftOriginalSignature = "";
       this._selectedPathwayKey = "";
+      this._selectedMemoryPathKey = "";
       this._selectedNoGoKey = "";
       this._pathwayDraftNotice =
-        `Edited ${this._pathwayDraftKind === "nogozone" ? "no-go zone" : "pathway"} saved as "${this._pathwayDraftName}" via ${topic}.`;
+        `Edited ${this._pathwayDraftKind === "nogozone" ? "no-go zone" : this._pathwayDraftKind === "sidewalk" ? "memory path" : "pathway"} saved as "${this._pathwayDraftName}" via ${topic}.`;
       this._activeEditTool = null;
       void this._requestFreshMapAfterEdit();
       this._completePendingUnsavedSaveAction();
     } catch (err) {
       this._clearPendingUnsavedSaveAction();
       const message = err instanceof Error ? err.message : String(err);
-      this._pathwayDraftNotice = `${this._pathwayDraftKind === "nogozone" ? "save_nogozone" : "save_pathway"} failed: ${message}`;
+      this._pathwayDraftNotice = `${this._pathwayDraftCommandName()} failed: ${message}`;
     } finally {
       this._pathwayDraftSending = false;
       this._render();
@@ -4408,18 +5549,81 @@ class S2JYarboMapCard extends HTMLElement {
     this._render();
   }
 
+  _dismissMemoryPathSettingsDialog() {
+    if (this._pathwayDraftSending) {
+      return;
+    }
+
+    this._memoryPathSettingsDialogOpen = false;
+    this._render();
+  }
+
+  async _saveSelectedMemoryPathSettings() {
+    const selectedMemoryPath = this._selectedMemoryPath();
+    if (!selectedMemoryPath || this._pathwayDraftSending || !this._hass || !this._entry?.entry_id) {
+      return;
+    }
+
+    if (selectedMemoryPath.id === null || selectedMemoryPath.id === undefined || `${selectedMemoryPath.id}` === "") {
+      this._pathwayDraftNotice = "The selected memory path does not have an id and cannot save settings.";
+      this._render();
+      return;
+    }
+
+    const bladeHeight = Number(this._memoryPathSettings.blade_height);
+    const planSpeed = Number(this._memoryPathSettings.plan_speed);
+    const payload = {
+      blade_speed: 0,
+      blade_height: Number.isFinite(bladeHeight) ? bladeHeight : 0,
+      turn_type: 0,
+      land_push_pod_place: 0,
+      route_angle: 0,
+      route_dis: 0.0,
+      offset_enable: null,
+      en_blade: this._memoryPathSettings.en_blade !== false,
+      plan_speed: Number.isFinite(planSpeed) ? planSpeed : 0.5,
+      id: selectedMemoryPath.id,
+    };
+
+    this._pathwayDraftSending = true;
+    this._render();
+    try {
+      const response = await this._hass.callApi("POST", "s2jyarbo/save_memory_path_settings", {
+        entry_id: this._entry.entry_id,
+        payload,
+      });
+      const topic = response?.topic || "command topic";
+      this._memoryPathSettingsDialogOpen = false;
+      this._pathwayDraftNotice =
+        `save_mower_path_memory_params sent for "${selectedMemoryPath.name || selectedMemoryPath.id || "memory path"}" via ${topic}.`;
+      void this._requestFreshMapAfterEdit();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this._pathwayDraftNotice = `save_mower_path_memory_params failed: ${message}`;
+    } finally {
+      this._pathwayDraftSending = false;
+      this._render();
+    }
+  }
+
   async _confirmDeleteSelectedPathway() {
     const selectedPathway = this._selectedPathway();
-    const selectedNoGoZone = this._selectedNoGoZone();
-    if ((!selectedPathway && !selectedNoGoZone) || this._pathwayDraftSending || !this._hass || !this._entry?.entry_id) {
+    const selectedMemoryPath = selectedPathway ? null : this._selectedMemoryPath();
+    const selectedNoGoZone = selectedPathway || selectedMemoryPath ? null : this._selectedNoGoZone();
+    if ((!selectedPathway && !selectedMemoryPath && !selectedNoGoZone) || this._pathwayDraftSending || !this._hass || !this._entry?.entry_id) {
       return;
     }
 
     const isNoGoZone = Boolean(selectedNoGoZone && !selectedPathway);
+    const isMemoryPath = Boolean(selectedMemoryPath && !selectedPathway && !selectedNoGoZone);
     const payload = isNoGoZone
       ? { id: selectedNoGoZone.id }
       : {};
-    if (!isNoGoZone) {
+    if (isMemoryPath) {
+      if (selectedMemoryPath.id !== null && selectedMemoryPath.id !== undefined && `${selectedMemoryPath.id}` !== "") {
+        payload.id = selectedMemoryPath.id;
+      }
+    } else if (!isNoGoZone) {
       if (selectedPathway.id !== null && selectedPathway.id !== undefined && `${selectedPathway.id}` !== "") {
         payload.id = selectedPathway.id;
       }
@@ -4432,11 +5636,20 @@ class S2JYarboMapCard extends HTMLElement {
       this._render();
       return;
     }
+    if (isMemoryPath && (selectedMemoryPath.id === null || selectedMemoryPath.id === undefined || `${selectedMemoryPath.id}` === "")) {
+      this._pathwayDraftNotice = "The selected memory path does not have an id and cannot be deleted.";
+      this._render();
+      return;
+    }
 
     this._pathwayDraftSending = true;
     this._render();
     try {
-      const apiPath = isNoGoZone ? "s2jyarbo/delete_nogozone" : "s2jyarbo/delete_pathway";
+      const apiPath = isNoGoZone
+        ? "s2jyarbo/delete_nogozone"
+        : isMemoryPath
+          ? "s2jyarbo/delete_sidewalk"
+          : "s2jyarbo/delete_pathway";
       const response = await this._hass.callApi("POST", apiPath, {
         entry_id: this._entry.entry_id,
         payload,
@@ -4444,13 +5657,17 @@ class S2JYarboMapCard extends HTMLElement {
       const topic = response?.topic || "command topic";
       this._pathwayDeleteDialogOpen = false;
       this._selectedPathwayKey = "";
+      this._selectedMemoryPathKey = "";
       this._selectedNoGoKey = "";
+      const selectedFeature = selectedNoGoZone || selectedMemoryPath || selectedPathway;
+      const commandName = isNoGoZone ? "del_nogozone" : isMemoryPath ? "del_sidewalk" : "del_pathway";
+      const fallbackLabel = isNoGoZone ? "no-go zone" : isMemoryPath ? "memory path" : "pathway";
       this._pathwayDraftNotice =
-        `${isNoGoZone ? "del_nogozone" : "del_pathway"} sent for "${(selectedNoGoZone || selectedPathway).name || (selectedNoGoZone || selectedPathway).id || (isNoGoZone ? "no-go zone" : "pathway")}" via ${topic}.`;
+        `${commandName} sent for "${selectedFeature.name || selectedFeature.id || fallbackLabel}" via ${topic}.`;
       void this._requestFreshMapAfterEdit();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this._pathwayDraftNotice = `${isNoGoZone ? "del_nogozone" : "del_pathway"} failed: ${message}`;
+      this._pathwayDraftNotice = `${isNoGoZone ? "del_nogozone" : isMemoryPath ? "del_sidewalk" : "del_pathway"} failed: ${message}`;
     } finally {
       this._pathwayDraftSending = false;
       this._render();
@@ -4528,6 +5745,10 @@ class S2JYarboMapCard extends HTMLElement {
       return closedPoints;
     }
 
+    return this._rangeFromOpenPoints(points);
+  }
+
+  _rangeFromOpenPoints(points) {
     return points.map((point, index) => {
       let phi = 0;
       if (points.length > 1) {
@@ -4557,9 +5778,393 @@ class S2JYarboMapCard extends HTMLElement {
     });
   }
 
+  _memoryPathTrimmingEdges(range) {
+    if (Array.isArray(this._pathwayDraftTrimmingEdges) && this._pathwayDraftTrimmingEdges.length) {
+      return this._pathwayDraftTrimmingEdges
+        .map((edge, index) => {
+          const edgeRange = this._rangeFromOpenPoints(Array.isArray(edge.points) ? edge.points : []);
+          if (edgeRange.length < 2) {
+            return null;
+          }
+
+          return {
+            id: edge.id ?? index,
+            range: edgeRange,
+            ref: edge.ref || {
+              latitude: 0.0,
+              longitude: 0.0,
+            },
+          };
+        })
+        .filter((edge) => edge !== null);
+    }
+
+    return [];
+  }
+
+  _memoryPathDraftEdgePoints() {
+    if (Array.isArray(this._pathwayDraftTrimmingEdges) && this._pathwayDraftTrimmingEdges.length) {
+      return this._pathwayDraftTrimmingEdges
+        .map((edge) => ({
+          ...edge,
+          points: Array.isArray(edge.points) ? edge.points : [],
+        }))
+        .filter((edge) => edge.points.length >= 2);
+    }
+
+    return [];
+  }
+
+  _shouldAutoAddMemoryPathTrimmingEdge() {
+    return (
+      this._pathwayDraftKind === "sidewalk"
+      && this._activeEditTool === "mp"
+      && this._memoryPathAutoAddTrimmingEdges === true
+    );
+  }
+
+  _addMemoryPathTrimmingEdgeForCenterPoint(pointIndex) {
+    if (
+      this._pathwayDraftKind !== "sidewalk"
+      || !Array.isArray(this._pathwayDraftPoints)
+      || this._pathwayDraftPoints.length < 2
+      || pointIndex < 0
+      || pointIndex >= this._pathwayDraftPoints.length
+    ) {
+      return false;
+    }
+
+    const segmentPoints = [];
+    if (pointIndex > 0) {
+      segmentPoints.push(this._pathwayDraftPoints[pointIndex - 1]);
+    }
+    segmentPoints.push(this._pathwayDraftPoints[pointIndex]);
+    if (pointIndex < this._pathwayDraftPoints.length - 1) {
+      segmentPoints.push(this._pathwayDraftPoints[pointIndex + 1]);
+    }
+
+    const edgePoints = this._memoryPathRightEdgeFromPoints(segmentPoints);
+    if (edgePoints.length < 2) {
+      return false;
+    }
+
+    const edge = {
+      id: this._nextMemoryPathTrimmingEdgeId(),
+      ref: {
+        latitude: 0.0,
+        longitude: 0.0,
+      },
+      points: edgePoints,
+    };
+    const edgeIndex = this._pathwayDraftTrimmingEdges.length;
+    this._pathwayDraftTrimmingEdges = [
+      ...this._pathwayDraftTrimmingEdges,
+      edge,
+    ];
+    this._selectedTrimmingEdgeIndex = edgeIndex;
+    this._selectedTrimmingPointIndex = pointIndex > 0 ? 1 : 0;
+    this._pathwayDraftTrimmingEdgeAnchors =
+      this._memoryPathTrimmingEdgeAnchors(this._pathwayDraftPoints, this._pathwayDraftTrimmingEdges);
+    return true;
+  }
+
+  _nextMemoryPathTrimmingEdgeId() {
+    const ids = this._pathwayDraftTrimmingEdges
+      .map((edge) => Number(edge?.id))
+      .filter((id) => Number.isFinite(id));
+    return ids.length ? Math.max(...ids) + 1 : 0;
+  }
+
+  _snapMemoryPathTrimmerPoint(localPoint) {
+    if (!Array.isArray(this._pathwayDraftPoints) || this._pathwayDraftPoints.length < 2) {
+      return null;
+    }
+
+    const ratio = this._polylineProjectionRatio(this._pathwayDraftPoints, localPoint);
+    return this._memoryPathRightEdgePointAtRatio(this._pathwayDraftPoints, ratio);
+  }
+
+  _memoryPathTrimmingEdgeAnchors(pathPoints, trimmingEdges) {
+    if (!Array.isArray(pathPoints) || pathPoints.length < 2 || !Array.isArray(trimmingEdges)) {
+      return [];
+    }
+
+    return trimmingEdges
+      .map((edge) => {
+        const points = Array.isArray(edge.points) ? edge.points : [];
+        return {
+          id: edge.id,
+          ref: edge.ref,
+          ratios: points
+            .map((point) => this._polylineProjectionRatio(pathPoints, point))
+            .filter((ratio) => Number.isFinite(ratio)),
+        };
+      })
+      .filter((edge) => edge.ratios.length >= 2);
+  }
+
+  _refreshMemoryPathDraftTrimmingEdgesFromAnchors() {
+    if (this._pathwayDraftKind !== "sidewalk" || !Array.isArray(this._pathwayDraftTrimmingEdgeAnchors)) {
+      return false;
+    }
+
+    const anchors = this._pathwayDraftTrimmingEdgeAnchors;
+    if (!anchors.length || !Array.isArray(this._pathwayDraftPoints) || this._pathwayDraftPoints.length < 2) {
+      return false;
+    }
+
+    this._pathwayDraftTrimmingEdges = anchors
+      .map((edge) => ({
+        id: edge.id,
+        ref: edge.ref,
+        points: edge.ratios
+          .map((ratio) => this._memoryPathRightEdgePointAtRatio(this._pathwayDraftPoints, ratio))
+          .filter((point) => point !== null),
+      }))
+      .filter((edge) => edge.points.length >= 2);
+    return true;
+  }
+
+  _polylineProjectionRatio(pathPoints, point) {
+    const totalLength = this._polylineLength(pathPoints);
+    if (!Number.isFinite(totalLength) || totalLength <= 0) {
+      return 0;
+    }
+
+    const px = Number(point?.x);
+    const py = Number(point?.y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) {
+      return 0;
+    }
+
+    let bestDistance = Number.POSITIVE_INFINITY;
+    let bestLength = 0;
+    let walkedLength = 0;
+    for (let index = 0; index < pathPoints.length - 1; index += 1) {
+      const start = pathPoints[index];
+      const end = pathPoints[index + 1];
+      const x1 = Number(start.x);
+      const y1 = Number(start.y);
+      const x2 = Number(end.x);
+      const y2 = Number(end.y);
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const length = Math.hypot(dx, dy);
+      if (!Number.isFinite(length) || length <= 0.000001) {
+        continue;
+      }
+
+      const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / (length * length)));
+      const projectedX = x1 + t * dx;
+      const projectedY = y1 + t * dy;
+      const distance = Math.hypot(px - projectedX, py - projectedY);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestLength = walkedLength + t * length;
+      }
+      walkedLength += length;
+    }
+
+    return Math.max(0, Math.min(1, bestLength / totalLength));
+  }
+
+  _nearestPolylineProjection(pathPoints, point) {
+    if (!Array.isArray(pathPoints) || pathPoints.length < 2) {
+      return null;
+    }
+
+    const px = Number(point?.x);
+    const py = Number(point?.y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) {
+      return null;
+    }
+
+    let bestProjection = null;
+    for (let index = 0; index < pathPoints.length - 1; index += 1) {
+      const start = pathPoints[index];
+      const end = pathPoints[index + 1];
+      const x1 = Number(start.x);
+      const y1 = Number(start.y);
+      const x2 = Number(end.x);
+      const y2 = Number(end.y);
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const lengthSquared = dx * dx + dy * dy;
+      if (!Number.isFinite(lengthSquared) || lengthSquared <= 0.000001) {
+        continue;
+      }
+
+      const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared));
+      const projectedX = x1 + t * dx;
+      const projectedY = y1 + t * dy;
+      const distance = Math.hypot(px - projectedX, py - projectedY);
+      if (!bestProjection || distance < bestProjection.distance) {
+        bestProjection = {
+          segmentIndex: index,
+          segmentRatio: t,
+          distance,
+        };
+      }
+    }
+
+    return bestProjection;
+  }
+
+  _resnapMemoryPathTrimmingEdgesForMovedCenterPoint(pointIndex, oldPathPoints, newPathPoints, oldTrimmingEdges) {
+    if (
+      !Array.isArray(oldPathPoints)
+      || !Array.isArray(newPathPoints)
+      || oldPathPoints.length !== newPathPoints.length
+      || !Array.isArray(oldTrimmingEdges)
+      || oldPathPoints.length < 2
+    ) {
+      return Array.isArray(this._pathwayDraftTrimmingEdges) ? this._pathwayDraftTrimmingEdges : [];
+    }
+
+    const affectedSegments = new Set();
+    if (pointIndex > 0) {
+      affectedSegments.add(pointIndex - 1);
+    }
+    if (pointIndex < oldPathPoints.length - 1) {
+      affectedSegments.add(pointIndex);
+    }
+
+    if (!affectedSegments.size) {
+      return oldTrimmingEdges;
+    }
+
+    return oldTrimmingEdges.map((edge) => ({
+      ...edge,
+      points: Array.isArray(edge.points)
+        ? edge.points.map((point) => {
+            const projection = this._nearestPolylineProjection(oldPathPoints, point);
+            if (!projection || !affectedSegments.has(projection.segmentIndex)) {
+              return { ...point };
+            }
+
+            return this._memoryPathRightEdgePointOnSegment(
+              newPathPoints,
+              projection.segmentIndex,
+              projection.segmentRatio,
+            ) || { ...point };
+          })
+        : [],
+    }));
+  }
+
+  _polylineLength(points) {
+    if (!Array.isArray(points) || points.length < 2) {
+      return 0;
+    }
+
+    let total = 0;
+    for (let index = 0; index < points.length - 1; index += 1) {
+      total += Math.hypot(
+        Number(points[index + 1].x) - Number(points[index].x),
+        Number(points[index + 1].y) - Number(points[index].y),
+      );
+    }
+    return total;
+  }
+
+  _memoryPathRightEdgePointAtRatio(pathPoints, ratio) {
+    if (!Array.isArray(pathPoints) || pathPoints.length < 2) {
+      return null;
+    }
+
+    const safeRatio = Math.max(0, Math.min(1, Number(ratio) || 0));
+    const totalLength = this._polylineLength(pathPoints);
+    if (!Number.isFinite(totalLength) || totalLength <= 0) {
+      return null;
+    }
+
+    const targetLength = totalLength * safeRatio;
+    let walkedLength = 0;
+    for (let index = 0; index < pathPoints.length - 1; index += 1) {
+      const start = pathPoints[index];
+      const end = pathPoints[index + 1];
+      const x1 = Number(start.x);
+      const y1 = Number(start.y);
+      const x2 = Number(end.x);
+      const y2 = Number(end.y);
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const length = Math.hypot(dx, dy);
+      if (!Number.isFinite(length) || length <= 0.000001) {
+        continue;
+      }
+
+      if (walkedLength + length >= targetLength || index === pathPoints.length - 2) {
+        const segmentRatio = Math.max(0, Math.min(1, (targetLength - walkedLength) / length));
+        const phi = Math.atan2(dy, dx);
+        const x = x1 + dx * segmentRatio;
+        const y = y1 + dy * segmentRatio;
+        return {
+          x: Number(this._number(x - Math.sin(phi) * MEMORY_PATH_HALF_WIDTH_METERS)),
+          y: Number(this._number(y + Math.cos(phi) * MEMORY_PATH_HALF_WIDTH_METERS)),
+        };
+      }
+
+      walkedLength += length;
+    }
+
+    return null;
+  }
+
+  _memoryPathRightEdgePointOnSegment(pathPoints, segmentIndex, segmentRatio) {
+    if (
+      !Array.isArray(pathPoints)
+      || segmentIndex < 0
+      || segmentIndex >= pathPoints.length - 1
+    ) {
+      return null;
+    }
+
+    const start = pathPoints[segmentIndex];
+    const end = pathPoints[segmentIndex + 1];
+    const x1 = Number(start.x);
+    const y1 = Number(start.y);
+    const x2 = Number(end.x);
+    const y2 = Number(end.y);
+    if (![x1, y1, x2, y2].every(Number.isFinite)) {
+      return null;
+    }
+
+    const safeRatio = Math.max(0, Math.min(1, Number(segmentRatio) || 0));
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const phi = Math.atan2(dy, dx);
+    const x = x1 + dx * safeRatio;
+    const y = y1 + dy * safeRatio;
+    return {
+      x: Number(this._number(x - Math.sin(phi) * MEMORY_PATH_HALF_WIDTH_METERS)),
+      y: Number(this._number(y + Math.cos(phi) * MEMORY_PATH_HALF_WIDTH_METERS)),
+    };
+  }
+
+  _memoryPathRightEdgeFromPoints(points) {
+    return this._memoryPathRightEdgeFromRange(this._rangeFromOpenPoints(points));
+  }
+
+  _memoryPathRightEdgeFromRange(range) {
+    if (!Array.isArray(range) || range.length < 2) {
+      return [];
+    }
+
+    return range.map((point) => {
+      const phi = Number(point.phi) || 0;
+      return {
+        x: Number(this._number(Number(point.x) - Math.sin(phi) * MEMORY_PATH_HALF_WIDTH_METERS)),
+        y: Number(this._number(Number(point.y) + Math.cos(phi) * MEMORY_PATH_HALF_WIDTH_METERS)),
+        phi: Number(this._number(phi)),
+      };
+    });
+  }
+
   _renderPathwayDraftShapes() {
     if (
       (this._activeEditTool !== "pa"
+        && this._activeEditTool !== "mp"
         && this._activeEditTool !== "pathway-edit"
         && this._activeEditTool !== "pathway-move"
         && this._activeEditTool !== "ng"
@@ -4571,6 +6176,7 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     const isNoGoZone = this._pathwayDraftKind === "nogozone";
+    const isMemoryPath = this._pathwayDraftKind === "sidewalk";
     const noGoClosedPoints = isNoGoZone && this._pathwayDraftPoints.length >= 2
       ? [...this._pathwayDraftPoints, this._pathwayDraftPoints[0]]
       : [];
@@ -4598,6 +6204,35 @@ class S2JYarboMapCard extends HTMLElement {
             vector-effect="non-scaling-stroke"
           ></polyline>
         `
+        : isMemoryPath
+          ? `
+          <polyline
+            points="${this._escape(this._svgPoints(this._pathwayDraftPoints))}"
+            fill="none"
+            stroke="rgba(56, 189, 248, 0.24)"
+            stroke-width="${this._number(MEMORY_PATH_WIDTH_METERS)}"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          ></polyline>
+          <polyline
+            points="${this._escape(this._svgPoints(this._pathwayDraftPoints))}"
+            fill="none"
+            stroke="rgba(14, 165, 233, 0.95)"
+            stroke-width="0.06"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          ></polyline>
+          ${this._memoryPathDraftEdgePoints().map((edge) => `
+            <polyline
+              points="${this._escape(this._svgPoints(edge.points))}"
+              fill="none"
+              stroke="#facc15"
+              stroke-width="0.08"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            ></polyline>
+          `).join("")}
+        `
         : `
           <polyline
             points="${this._escape(this._svgPoints(this._pathwayDraftPoints))}"
@@ -4610,24 +6245,60 @@ class S2JYarboMapCard extends HTMLElement {
           ></polyline>
         `
       : "";
-    const markers = this._pathwayDraftPoints
-      .map((point, index) => {
-        const displayPoint = this._displayPoint(point);
-        return `
-          <circle
-            cx="${this._number(displayPoint.x)}"
-            cy="${this._number(displayPoint.y)}"
-            r="0.16"
-            fill="${index === 0 ? "rgba(255, 255, 255, 0.95)" : isNoGoZone ? "rgba(255, 0, 0, 0.95)" : "rgba(34, 211, 238, 0.95)"}"
-            stroke="rgba(15, 23, 42, 0.7)"
-            stroke-width="0.04"
-            vector-effect="non-scaling-stroke"
-          ></circle>
-        `;
-      })
-      .join("");
+    const markers = isMemoryPath && this._memoryPathTrimmerMode
+      ? this._renderMemoryPathTrimmerMarkers()
+      : this._pathwayDraftPoints
+        .map((point, index) => {
+          const displayPoint = this._displayPoint(point);
+          const selectedPoint = index === this._selectedDraftPointIndex;
+          return `
+            <circle
+              cx="${this._number(displayPoint.x)}"
+              cy="${this._number(displayPoint.y)}"
+              r="${selectedPoint ? "0.22" : "0.16"}"
+              fill="${selectedPoint ? "#ffffff" : index === 0 ? "rgba(255, 255, 255, 0.95)" : isNoGoZone ? "rgba(255, 0, 0, 0.95)" : isMemoryPath ? "#facc15" : "rgba(34, 211, 238, 0.95)"}"
+              stroke="${selectedPoint ? "rgba(15, 23, 42, 0.95)" : "rgba(15, 23, 42, 0.7)"}"
+              stroke-width="${selectedPoint ? "0.06" : "0.04"}"
+              vector-effect="non-scaling-stroke"
+            ></circle>
+          `;
+        })
+        .join("");
 
     return `${polyline}${markers}`;
+  }
+
+  _renderMemoryPathTrimmerMarkers() {
+    if (!Array.isArray(this._pathwayDraftTrimmingEdges)) {
+      return "";
+    }
+
+    return this._pathwayDraftTrimmingEdges
+      .map((edge, edgeIndex) => {
+        const selectedEdge = edgeIndex === this._selectedTrimmingEdgeIndex;
+        const points = Array.isArray(edge.points) ? edge.points : [];
+        return points
+          .map((point, pointIndex) => {
+            const selectedPoint =
+              selectedEdge
+              && this._selectedTrimmingSelectionKind === "point"
+              && pointIndex === this._selectedTrimmingPointIndex;
+            const displayPoint = this._displayPoint(point);
+            return `
+              <circle
+                cx="${this._number(displayPoint.x)}"
+                cy="${this._number(displayPoint.y)}"
+                r="${selectedPoint ? "0.22" : selectedEdge ? "0.18" : "0.15"}"
+                fill="${selectedPoint ? "#ffffff" : selectedEdge ? "#fef08a" : "#facc15"}"
+                stroke="${selectedEdge ? "rgba(15, 23, 42, 0.95)" : "rgba(15, 23, 42, 0.62)"}"
+                stroke-width="${selectedPoint ? "0.06" : "0.04"}"
+                vector-effect="non-scaling-stroke"
+              ></circle>
+            `;
+          })
+          .join("");
+      })
+      .join("");
   }
 
   _entryLocation(entry) {
