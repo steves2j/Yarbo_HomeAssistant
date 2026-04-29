@@ -16,6 +16,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._loading = true;
     this._loadingEntry = false;
     this._reloadAfterLoad = false;
+    this._deferredReloadAfterEdit = false;
     this._error = "";
     this._initialized = false;
     this._structureReady = false;
@@ -30,6 +31,7 @@ class S2JYarboMapCard extends HTMLElement {
     this._navigationGuardCurrentUrl = "";
     this._lastLoadTimestamp = 0;
     this._lastEntitySignature = "";
+    this._pendingEmbeddedEntry = undefined;
     this._mapRequestPending = false;
     this._mapRequestTimestamp = 0;
     this._followMode = true;
@@ -140,7 +142,9 @@ class S2JYarboMapCard extends HTMLElement {
 
     if (this._embedded) {
       this._initialized = true;
-      this._ingestEmbeddedEntry(this._entry);
+      if (!this._isEditUpdateLocked()) {
+        this._ingestEmbeddedEntry(this._entry);
+      }
       return;
     }
 
@@ -184,6 +188,12 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _ingestEmbeddedEntry(entry) {
+    if (this._isEditUpdateLocked()) {
+      this._pendingEmbeddedEntry = entry || null;
+      return;
+    }
+
+    this._pendingEmbeddedEntry = undefined;
     this._entry = entry || null;
     this._loading = false;
     this._error = "";
@@ -300,6 +310,11 @@ class S2JYarboMapCard extends HTMLElement {
       return;
     }
 
+    if (this._isEditUpdateLocked()) {
+      this._deferredReloadAfterEdit = true;
+      return;
+    }
+
     if (this._loadingEntry) {
       this._reloadAfterLoad = true;
       return;
@@ -322,9 +337,18 @@ class S2JYarboMapCard extends HTMLElement {
       }
 
       if (hasSelector && entries.length === 0) {
+        if (this._entry) {
+          this._error = "";
+          return;
+        }
         this._entry = null;
         this._error =
           "No S2JYarbo device matched this card configuration. Re-add the card from the device page or update its selector.";
+        return;
+      }
+
+      if (entries.length === 0 && this._entry) {
+        this._error = "";
         return;
       }
 
@@ -368,6 +392,31 @@ class S2JYarboMapCard extends HTMLElement {
 
   _liveUpdatesEnabled() {
     return (this._embedded || this._config?.live_updates !== false) && !this._editMode;
+  }
+
+  _isEditUpdateLocked() {
+    return this._editMode || Boolean(this._activeDrag);
+  }
+
+  _flushDeferredUpdatesAfterUnlock() {
+    if (this._isEditUpdateLocked()) {
+      return false;
+    }
+
+    if (this._pendingEmbeddedEntry !== undefined) {
+      const pendingEntry = this._pendingEmbeddedEntry;
+      this._pendingEmbeddedEntry = undefined;
+      this._ingestEmbeddedEntry(pendingEntry);
+      return true;
+    }
+
+    if (this._deferredReloadAfterEdit) {
+      this._deferredReloadAfterEdit = false;
+      void this._loadEntry();
+      return true;
+    }
+
+    return false;
   }
 
   _handleHassUpdate() {
@@ -505,6 +554,10 @@ class S2JYarboMapCard extends HTMLElement {
 
     window.setTimeout(() => {
       this._mapRequestPending = false;
+      if (this._isEditUpdateLocked()) {
+        this._deferredReloadAfterEdit = true;
+        return;
+      }
       void this._loadEntry();
     }, 2500);
   }
@@ -2216,6 +2269,7 @@ class S2JYarboMapCard extends HTMLElement {
     window.removeEventListener("pointermove", this._handlePointerMove);
     window.removeEventListener("pointerup", this._handlePointerUp);
     window.removeEventListener("pointercancel", this._handlePointerUp);
+    this._flushDeferredUpdatesAfterUnlock();
   }
 
   _applyTransformOnly() {
@@ -4079,6 +4133,9 @@ class S2JYarboMapCard extends HTMLElement {
       this._unsavedChangesAfterSaveNavigationUrl = "";
       if (!this._embedded && this._refreshHandle === null && this._hass) {
         void this._startRefreshing();
+      }
+      if (this._flushDeferredUpdatesAfterUnlock()) {
+        return;
       }
     } else {
       if (this._refreshHandle) {

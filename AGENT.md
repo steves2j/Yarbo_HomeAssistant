@@ -96,3 +96,7 @@
 - When changing button actions, keep Home Assistant auth-aware API calls through the existing backend views rather than raw browser fetches
 - If investigating missing `app/*` topics, verify the broker delivery path before changing the subscription code
 - If changing map rendering, editor behavior, or GPS correction behavior, update both `s2jyarbo-map-card.js` and `s2jyarbo-map-dev-card.js` so the dev card and main card stay aligned
+
+### On Reading this file and processing project details
+
+- After making any changes or on the start of a new session. Start the local Docker image of the project so that any changes can be viewed and develop upon locally.

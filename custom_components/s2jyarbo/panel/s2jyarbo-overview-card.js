@@ -45,6 +45,8 @@ class YarboOverviewCard extends HTMLElement {
     this._volumeDrafts = new Map();
     this._hiddenBreadcrumbEntries = new Set();
     this._trailPreferenceInitialized = new Set();
+    this._notificationToastKeys = new Map();
+    this._notificationToastTimers = new Map();
     this._handleSitePlanPointerMove = this._handleSitePlanPointerMove.bind(this);
     this._handleSitePlanPointerUp = this._handleSitePlanPointerUp.bind(this);
   }
@@ -93,6 +95,10 @@ class YarboOverviewCard extends HTMLElement {
       clearTimeout(timer);
     }
     this._powerEnableTimers.clear();
+    for (const timer of this._notificationToastTimers.values()) {
+      clearTimeout(timer);
+    }
+    this._notificationToastTimers.clear();
     this._clearActiveSitePlanDrag();
     for (const state of this._siteLeafletMaps.values()) {
       state.map.remove();
@@ -438,6 +444,10 @@ class YarboOverviewCard extends HTMLElement {
         statusState.attributes.heading ?? "",
         statusState.attributes.battery_level ?? "",
         statusState.attributes.error_code ?? "",
+        statusState.attributes.notification_count ?? "",
+        statusState.attributes.last_notification_at ?? "",
+        statusState.attributes.last_notification_title ?? "",
+        statusState.attributes.last_notification_message ?? "",
       );
     }
 
@@ -523,6 +533,11 @@ class YarboOverviewCard extends HTMLElement {
       this._siteMapLayers.clear();
       this._hiddenBreadcrumbEntries.clear();
       this._trailPreferenceInitialized.clear();
+      this._notificationToastKeys.clear();
+      for (const timer of this._notificationToastTimers.values()) {
+        clearTimeout(timer);
+      }
+      this._notificationToastTimers.clear();
       stack.innerHTML =
         '<div class="empty">No S2JYarbo devices have published a usable DeviceMSG yet.</div>';
       return;
@@ -571,6 +586,12 @@ class YarboOverviewCard extends HTMLElement {
       this._sitePlanViews.delete(entryId);
       this._hiddenBreadcrumbEntries.delete(entryId);
       this._trailPreferenceInitialized.delete(entryId);
+      this._notificationToastKeys.delete(entryId);
+      const notificationTimer = this._notificationToastTimers.get(entryId);
+      if (notificationTimer) {
+        clearTimeout(notificationTimer);
+        this._notificationToastTimers.delete(entryId);
+      }
     }
   }
 
@@ -643,6 +664,7 @@ class YarboOverviewCard extends HTMLElement {
           display: grid;
           gap: 16px;
           padding: 18px;
+          position: relative;
         }
         .device-header {
           align-items: start;
@@ -806,6 +828,77 @@ class YarboOverviewCard extends HTMLElement {
         }
         .battery-bolt[hidden] {
           display: none;
+        }
+        .notification-toast {
+          align-items: start;
+          background: color-mix(in srgb, var(--card-background-color) 96%, var(--primary-background-color));
+          border: 1px solid color-mix(in srgb, var(--divider-color) 76%, transparent);
+          border-left: 4px solid var(--primary-color);
+          border-radius: 14px;
+          box-shadow: 0 14px 36px rgba(0, 0, 0, 0.24);
+          display: grid;
+          gap: 10px;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          max-width: min(420px, calc(100% - 32px));
+          padding: 12px 12px 12px 14px;
+          position: absolute;
+          right: 16px;
+          top: 16px;
+          z-index: 4;
+        }
+        .notification-toast[hidden] {
+          display: none;
+        }
+        .notification-toast.warning {
+          border-left-color: var(--warning-color, #f59e0b);
+        }
+        .notification-toast.error {
+          border-left-color: var(--error-color);
+        }
+        .notification-toast.info,
+        .notification-toast.success {
+          border-left-color: var(--primary-color);
+        }
+        .notification-toast-icon {
+          --mdc-icon-size: 20px;
+          color: var(--secondary-text-color);
+          margin-top: 1px;
+        }
+        .notification-toast.warning .notification-toast-icon {
+          color: var(--warning-color, #f59e0b);
+        }
+        .notification-toast.error .notification-toast-icon {
+          color: var(--error-color);
+        }
+        .notification-toast-title {
+          font-size: 13px;
+          font-weight: 700;
+          line-height: 1.25;
+          margin-bottom: 3px;
+        }
+        .notification-toast-message {
+          color: var(--secondary-text-color);
+          font-size: 12px;
+          line-height: 1.35;
+          overflow-wrap: anywhere;
+        }
+        .notification-toast-close {
+          align-items: center;
+          appearance: none;
+          background: none;
+          border: none;
+          border-radius: 999px;
+          color: var(--secondary-text-color);
+          cursor: pointer;
+          display: inline-flex;
+          height: 24px;
+          justify-content: center;
+          padding: 0;
+          width: 24px;
+        }
+        .notification-toast-close:hover {
+          background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
+          color: var(--primary-text-color);
         }
         .device-battery.battery-green .battery-shell {
           border-color: color-mix(in srgb, #2f9e44 42%, var(--divider-color));
@@ -1469,6 +1562,16 @@ class YarboOverviewCard extends HTMLElement {
     section.className = "device";
     section.dataset.entryId = entryId;
     section.innerHTML = `
+      <div class="notification-toast" hidden role="status" aria-live="polite">
+        <ha-icon class="notification-toast-icon" icon="mdi:bell-outline" aria-hidden="true"></ha-icon>
+        <div class="notification-toast-copy">
+          <div class="notification-toast-title"></div>
+          <div class="notification-toast-message"></div>
+        </div>
+        <button class="notification-toast-close" type="button" aria-label="Dismiss notification" title="Dismiss notification">
+          <ha-icon class="button-icon" icon="mdi:close" aria-hidden="true"></ha-icon>
+        </button>
+      </div>
       <div class="device-header">
         <div class="device-header-main">
           <h2 class="device-title"></h2>
@@ -1607,6 +1710,10 @@ class YarboOverviewCard extends HTMLElement {
     refreshButton?.addEventListener("click", () => {
       void this._refreshDeviceData(entryId);
     });
+    const toastClose = section.querySelector(".notification-toast-close");
+    toastClose?.addEventListener("click", () => {
+      this._hideNotificationToast(entryId, section);
+    });
     const planSelect = section.querySelector(".plan-select");
     planSelect?.addEventListener("change", (event) => {
       const nextValue = event.target instanceof HTMLSelectElement ? event.target.value : "";
@@ -1723,6 +1830,8 @@ class YarboOverviewCard extends HTMLElement {
         <span>Serial ${this._escape(entry.serial_number || "Unknown")}</span>
       `;
     }
+
+    this._maybeShowNotificationToast(section, entry, lastNotification);
 
     const satelliteBadge = section.querySelector(".device-satellites");
     const satelliteCount = section.querySelector(".device-satellite-count");
@@ -4162,6 +4271,105 @@ class YarboOverviewCard extends HTMLElement {
     }
 
     return parts.length ? parts.join(" · ") : "—";
+  }
+
+  _maybeShowNotificationToast(section, entry, notification) {
+    const entryId = entry.entry_id;
+    const key = this._notificationToastKey(entry, notification);
+    if (!entryId) {
+      return;
+    }
+    if (!key) {
+      if (!this._notificationToastKeys.has(entryId)) {
+        this._notificationToastKeys.set(entryId, "__none__");
+      }
+      return;
+    }
+
+    const previousKey = this._notificationToastKeys.get(entryId);
+    this._notificationToastKeys.set(entryId, key);
+    if (!previousKey || previousKey === key) {
+      return;
+    }
+
+    const toast = section.querySelector(".notification-toast");
+    const titleElement = section.querySelector(".notification-toast-title");
+    const messageElement = section.querySelector(".notification-toast-message");
+    const iconElement = section.querySelector(".notification-toast-icon");
+    if (!toast || !titleElement || !messageElement) {
+      return;
+    }
+
+    const title = typeof notification?.title === "string" && notification.title.trim()
+      ? notification.title.trim()
+      : "Yarbo notification";
+    const message = typeof notification?.message === "string" && notification.message.trim()
+      ? notification.message.trim()
+      : "Yarbo reported a new notification.";
+    const level = typeof notification?.level === "string" && notification.level
+      ? notification.level
+      : "info";
+
+    titleElement.textContent = title;
+    messageElement.textContent = message;
+    toast.classList.remove("info", "success", "warning", "error");
+    toast.classList.add(["success", "warning", "error"].includes(level) ? level : "info");
+    toast.hidden = false;
+
+    if (iconElement) {
+      iconElement.setAttribute("icon", this._notificationToastIcon(level));
+    }
+
+    const existingTimer = this._notificationToastTimers.get(entryId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    this._notificationToastTimers.set(
+      entryId,
+      window.setTimeout(() => {
+        this._hideNotificationToast(entryId, section);
+      }, 8000),
+    );
+  }
+
+  _notificationToastKey(entry, notification) {
+    if (!notification || typeof notification !== "object") {
+      return null;
+    }
+
+    const count = entry.notification_count ?? "";
+    const id = typeof notification.id === "string" ? notification.id : "";
+    const receivedAt =
+      typeof notification.received_at === "string" ? notification.received_at : "";
+    const title = typeof notification.title === "string" ? notification.title : "";
+    const message = typeof notification.message === "string" ? notification.message : "";
+    return [count, id, receivedAt, title, message].join("|");
+  }
+
+  _notificationToastIcon(level) {
+    if (level === "error") {
+      return "mdi:alert-circle-outline";
+    }
+    if (level === "warning") {
+      return "mdi:alert-outline";
+    }
+    if (level === "success") {
+      return "mdi:check-circle-outline";
+    }
+    return "mdi:bell-outline";
+  }
+
+  _hideNotificationToast(entryId, section) {
+    const timer = this._notificationToastTimers.get(entryId);
+    if (timer) {
+      clearTimeout(timer);
+      this._notificationToastTimers.delete(entryId);
+    }
+
+    const toast = section.querySelector(".notification-toast");
+    if (toast) {
+      toast.hidden = true;
+    }
   }
 
   _notificationSummary(notification) {
