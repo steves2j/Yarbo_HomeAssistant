@@ -6,6 +6,20 @@ This project is still in early development, so the current history is mostly fea
 
 The format loosely follows Keep a Changelog and uses semantic versioning where practical.
 
+## [0.5.0] - 2026-04-24
+
+### Added features
+
+- Added Memory pathing with trimmer side selection
+
+### Bug Fixes
+
+- Fixed a background update of SVG causing loss of click hold lock on editing object.
+
+## Internal changes
+
+- Change the way panning is done. Now to move you need to shift or ctrl where as before it was shift to pan.
+
 ## [0.4.0] - 2026-04-24
 
 ### Added features

@@ -26,3 +26,5 @@ Project backlog and near-term ideas for the Yarbo Home Assistant integration.
   - Add Home Assistant event support for Yarbo actions and state transitions.
   - Make Yarbo state usable in automations, triggers, and alarm flows.
 - Make internationalizable.
+- Auto Detect Yarbo's on networks
+- Save map locally the then load locally. Not found the API to reload maps from local store yet.
