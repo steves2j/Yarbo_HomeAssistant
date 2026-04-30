@@ -1773,17 +1773,7 @@ def _parse_site_map_response(response_body: str) -> dict[str, Any] | None:
     if not isinstance(outer_payload, dict):
         return None
 
-    encoded_map = outer_payload.get("data")
-    if not isinstance(encoded_map, str):
-        return None
-
-    try:
-        compressed_map = base64.b64decode(encoded_map)
-        decoded_map = zlib.decompress(compressed_map).decode("utf-8")
-        inner_payload = json.loads(decoded_map)
-    except (ValueError, UnicodeDecodeError, binascii.Error, zlib.error):
-        return None
-
+    inner_payload = _extract_site_map_payload(outer_payload)
     if not isinstance(inner_payload, dict):
         return None
 
@@ -1821,6 +1811,43 @@ def _parse_site_map_response(response_body: str) -> dict[str, Any] | None:
         "electric_fence": electric_fence,
         "charging_points": charging_points,
     }
+
+
+def _extract_site_map_payload(outer_payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the map geometry object from old or new get_map response formats."""
+    candidate = outer_payload.get("data")
+    if isinstance(candidate, dict):
+        return candidate
+
+    if candidate is None and _looks_like_site_map_payload(outer_payload):
+        return outer_payload
+
+    if not isinstance(candidate, str):
+        return None
+
+    try:
+        compressed_map = base64.b64decode(candidate)
+        decoded_map = zlib.decompress(compressed_map).decode("utf-8")
+        decoded_payload = json.loads(decoded_map)
+    except (ValueError, UnicodeDecodeError, binascii.Error, zlib.error):
+        return None
+
+    return decoded_payload if isinstance(decoded_payload, dict) else None
+
+
+def _looks_like_site_map_payload(payload: dict[str, Any]) -> bool:
+    """Return True when a payload already looks like a decoded map object."""
+    return any(
+        key in payload
+        for key in (
+            "areas",
+            "nogozones",
+            "pathways",
+            "sidewalks",
+            "elec_fence",
+            "allchargingData",
+        )
+    )
 
 
 def _parse_preview_area_path(response_body: str) -> dict[str, Any] | None:
