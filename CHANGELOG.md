@@ -6,6 +6,12 @@ This project is still in early development, so the current history is mostly fea
 
 The format loosely follows Keep a Changelog and uses semantic versioning where practical.
 
+## [0.7.1] - 2026-04-30
+
+### Bug fixes
+
+- Fixed race condition with registering cards in ha.
+
 ## [0.7.0] - 2026-04-30
 
 ### Bug fixes
