@@ -61,9 +61,8 @@ See [CHANGELOG.md](CHANGELOG.md) for feature history.
   - restart
   - volume update
   - bulk refresh
-- Standalone development map card for protocol exploration and edit staging:
-  - `custom:s2jyarbo-map-card`
 - Auto-refresh of stale device data when `Last Updated` is missing or older than one hour
+- Three custom cards to add to your dashboard.
 
 ## Project layout
 
@@ -110,42 +109,6 @@ Example target path:
 <config>/
 └── custom_components/
     └── s2jyarbo/
-```
-
-## Quick start
-
-### 1. Start local Home Assistant
-
-```bash
-./scripts/ha-up.sh
-```
-
-Open `http://localhost:8123`.
-
-On first run, complete the Home Assistant onboarding flow.
-
-### 2. Add S2JYarbo
-
-In Home Assistant:
-
-1. Open `Settings`
-2. Open `Devices & Services`
-3. Click `Add Integration`
-4. Search for `S2JYarbo Home Assistant Integration`
-5. Enter:
-   - broker host/IP
-   - port
-   - TLS setting
-   - device serial number
-
-### 3. Useful local commands
-
-```bash
-./scripts/ha-logs.sh
-./scripts/ha-down.sh
-./scripts/bootstrap.sh
-source .venv/bin/activate
-./scripts/lint.sh
 ```
 
 ## Release and distribution notes
@@ -195,13 +158,17 @@ It shows:
 - packet metadata
 - merged `DeviceMSG` document
 
-### S2JYarbo overview card
+### S2JYarbo dashboard cards
 
-The custom card is auto-registered as `s2jyarbo-overview-card`.
+The frontend registers three separate Lovelace cards:
+
+- `custom:s2jyarbo-control-card`
+- `custom:s2jyarbo-map-card`
+- `custom:s2jyarbo-advanced-card`
 
 Recommended:
-- add it from the device page using `Add to Dashboard`, then pick `S2JYarbo Overview`
-- this creates one card per device
+- add the three cards to a normal Lovelace dashboard
+- configure each card for the same S2JYarbo device when you want a complete dashboard view
 
 If you are using Home Assistant `2026.4` or newer, be aware that new installs use the new auto-generated Home/Overview dashboard by default. That view only exposes `Add entity` and does not behave like a normal Lovelace dashboard for custom cards.
 
@@ -213,53 +180,65 @@ In that case, the working path is:
 4. Open that dashboard
 5. Click `Edit dashboard`
 6. Click `Add card`
-7. Add `custom:s2jyarbo-overview-card`
+7. Add the S2JYarbo custom cards you want
 
 If you prefer, you can also create a dashboard from the `Overview (legacy)` template and add the card there.
 
-Use it in Lovelace as:
+Example Lovelace setup:
 
 ```yaml
-type: custom:s2jyarbo-overview-card
+type: custom:s2jyarbo-control-card
+---
+type: custom:s2jyarbo-map-card
+---
+type: custom:s2jyarbo-advanced-card
 ```
 
-The card renders one widget for the selected S2JYarbo device and includes:
+The control card includes:
 
 - connection state
-- satellite count
+- serial number
 - battery and recharge action
-- integrated local map with decoded site geometry, follow mode, zoom, and breadcrumbs
-  - GPS coordinates and heading shown in-map
-  - fixed GPS offset correction applied to the live Yarbo position
-  - trail width changes between transit and 550 mm cutting width based on mower motor state
-  - magenta trail segments indicate reverse movement
-  - `plan_feedback` overlays:
-    - visited vs remaining plan path rendering
-    - right-side plan summary pill
-  - `recharge_feedback` shown as a cyan dotted return-to-dock route
-  - `cloud_points_feedback` shown as tomato collision/barrier strips
-  - edit mode for pathways and no-go zones:
-    - a full-browser warning acknowledgement must be accepted once and is stored in Home Assistant
-    - point insert, drag, and delete
-    - Ctrl-drag whole-object move
-    - Shift-scroll rotate
-    - Ctrl-scroll no-go zone resize
-    - no-go zone context menu actions for `ToCircle`, `addSquare`, and `addCircle`
-    - unsaved-change prompts with discard, cancel, and save flows
+- Wi-Fi signal strength
+- satellite count
 - plan selection
 - start percentage slider
 - start / pause / resume / stop controls
-- advanced controls for shutdown, restart, volume, and Wi-Fi details
 
-### Standalone development map card
+The map card includes:
 
-There is also a separate standalone development card for protocol exploration and edit staging:
+- decoded site geometry from `get_map`
+- follow mode, zoom, pan, reset, breadcrumbs, and live device heading
+- fixed GPS offset correction applied to the live Yarbo position
+- trail width changes between transit and 550 mm cutting width based on mower motor state
+- magenta trail segments for reverse movement
+- `plan_feedback` overlays:
+  - visited vs remaining plan path rendering
+  - right-side plan summary pill
+- `recharge_feedback` as a cyan dotted return-to-dock route
+- `cloud_points_feedback` as tomato collision/barrier strips
+- pathway, memory path, and no-go zone edit mode:
+  - full-browser warning acknowledgement stored in Home Assistant
+  - point insert, drag, and delete
+  - Ctrl-drag whole-object move
+  - Shift-scroll rotate
+  - Ctrl-scroll no-go zone resize
+  - no-go zone context menu actions for `ToCircle`, `addSquare`, and `addCircle`
+  - unsaved-change prompts with discard, cancel, and save flows
+- background aerial image support:
+  - upload a background image
+  - Shift-drag to move the image
+  - scroll to scale the image
+  - Ctrl-scroll to rotate the image around the cursor
+  - opacity control
+  - placement import/export JSON for backup/restore across Home Assistant instances
 
-```yaml
-type: custom:s2jyarbo-map-card
-```
+The advanced card includes:
 
-It mirrors the shared map/editor behavior closely enough to test new MQTT-derived overlays and edit workflows before they are merged into the main overview widget.
+- status, battery, firmware, GPS, network, and diagnostic details
+- shutdown and restart controls
+- volume control
+- Wi-Fi details
 
 ## MQTT behavior
 

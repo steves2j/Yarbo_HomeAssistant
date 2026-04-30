@@ -14,7 +14,6 @@ Project backlog and near-term ideas for the Yarbo Home Assistant integration.
 
 ## Mapping and visuals
 
-- Add Ariel overview background with map warping to match the Yarbo plan mapping.
 
 ## Home Assistant integration depth
 

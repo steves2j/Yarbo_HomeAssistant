@@ -6,6 +6,41 @@ This project is still in early development, so the current history is mostly fea
 
 The format loosely follows Keep a Changelog and uses semantic versioning where practical.
 
+## [0.6.0] - 2026-04-30
+
+### Added features
+
+- Split the dashboard experience into three separate Lovelace cards:
+  - `custom:s2jyarbo-control-card`
+  - `custom:s2jyarbo-map-card`
+  - `custom:s2jyarbo-advanced-card`
+- Added the control card for serial number, battery, Wi-Fi signal strength, satellite count, plan selection, start percentage, and start/pause/resume/stop controls
+- Added the advanced card for detailed status, diagnostics, firmware, GPS, network, shutdown/restart, volume, and Wi-Fi details
+- Promoted the map view into its own `custom:s2jyarbo-map-card`
+- Added aerial/background image support to the map card:
+  - image upload and persistent storage through Home Assistant
+  - manual placement with Shift-drag pan, scroll zoom, and Ctrl-scroll rotation
+  - opacity control
+  - rotate and flip controls
+  - background image placement save/clear flow
+  - clear confirmation
+  - unsaved-change protection when closing the panel, leaving edit mode, or navigating away
+  - placement import/export JSON for backup/restore on another Home Assistant instance
+- Added a background image edit tool inside map edit mode
+- Added notification toast display for Yarbo notifications
+
+### Changed
+
+- The old overview card is no longer the recommended dashboard card setup; use the three separate cards instead
+- Background image controls are hidden until edit mode is enabled and the background image tool is opened
+- Map frontend now registers `custom:s2jyarbo-map-card` directly
+
+### Bug fixes
+
+- Prevented map refreshes from interrupting active map/object editing
+- Prevented background image placement from snapping back during refreshes by preserving draft placement state
+- Removed the failed image-anchor-to-SVG matching workflow in favor of manual placement
+
 ## [0.5.0] - 2026-04-24
 
 ### Added features

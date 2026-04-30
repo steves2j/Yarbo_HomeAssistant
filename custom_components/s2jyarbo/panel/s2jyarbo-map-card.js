@@ -38,6 +38,17 @@ class S2JYarboMapCard extends HTMLElement {
     this._trailVisible = true;
     this._planFeedbackVisible = true;
     this._cloudPointsVisible = true;
+    this._aerialOverlayVisible = true;
+    this._aerialPanelOpen = false;
+    this._aerialCalibrationMode = false;
+    this._aerialCalibrationStep = "image";
+    this._aerialCalibrationDraft = [];
+    this._aerialCalibrationTransform = null;
+    this._aerialPendingImagePoint = null;
+    this._aerialOverlaySaving = false;
+    this._aerialOverlayNotice = "";
+    this._aerialPlacementOriginalSignature = "";
+    this._aerialPlacementOriginalOverlay = null;
     this._editMode = false;
     this._editToolsExpanded = false;
     this._activeEditTool = null;
@@ -395,7 +406,7 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _isEditUpdateLocked() {
-    return this._editMode || Boolean(this._activeDrag);
+    return this._editMode || this._aerialCalibrationMode || Boolean(this._activeDrag);
   }
 
   _flushDeferredUpdatesAfterUnlock() {
@@ -439,7 +450,8 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _scheduleReload(delay = 400) {
-    if (this._editMode) {
+    if (this._isEditUpdateLocked()) {
+      this._deferredReloadAfterEdit = true;
       return;
     }
 
@@ -726,11 +738,70 @@ class S2JYarboMapCard extends HTMLElement {
         .map-canvas.is-dragging {
           cursor: grabbing;
         }
+        .map-canvas.is-aerial-calibrating,
+        .map-canvas.is-aerial-calibrating .map-svg,
+        .map-canvas.is-aerial-calibrating .map-svg * {
+          cursor: crosshair;
+        }
+        .map-canvas.is-aerial-calibrating.is-dragging,
+        .map-canvas.is-aerial-calibrating.is-dragging .map-svg,
+        .map-canvas.is-aerial-calibrating.is-dragging .map-svg * {
+          cursor: grabbing;
+        }
+        .map-canvas.is-aerial-calibrating .map-controls,
+        .map-canvas.is-aerial-calibrating .map-edit-controls,
+        .map-canvas.is-aerial-calibrating .map-edit-actions,
+        .map-canvas.is-aerial-calibrating .map-selected-actions,
+        .map-canvas.is-aerial-calibrating .map-overlay {
+          display: none;
+        }
         .map-svg {
           display: block;
           height: 100%;
           min-height: 360px;
           width: 100%;
+        }
+        .aerial-image {
+          pointer-events: auto;
+        }
+        .aerial-image.is-calibrating {
+          cursor: crosshair;
+        }
+        .aerial-panel {
+          background: color-mix(in srgb, var(--card-background-color) 88%, transparent);
+          border: 1px solid color-mix(in srgb, var(--divider-color) 75%, transparent);
+          border-radius: 12px;
+          display: grid;
+          gap: 8px;
+          left: var(--content-inset-left, 12px);
+          max-width: min(380px, calc(100% - var(--content-inset-left, 12px) - var(--content-inset-right, 12px) - 16px));
+          padding: 10px;
+          pointer-events: auto;
+          position: absolute;
+          top: calc(var(--content-inset-top, 12px) + 56px);
+          z-index: 2;
+        }
+        .aerial-panel-row {
+          align-items: center;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .aerial-file-input,
+        .aerial-import-input {
+          display: none;
+        }
+        .aerial-notice {
+          color: var(--secondary-text-color);
+          font-size: 12px;
+          line-height: 1.35;
+        }
+        .aerial-notice.error {
+          color: var(--error-color);
+        }
+        .aerial-opacity {
+          accent-color: var(--primary-color);
+          width: 120px;
         }
         .map-controls {
           display: flex;
@@ -1260,7 +1331,7 @@ class S2JYarboMapCard extends HTMLElement {
       ${meta}
       <div class="map-card">
           <div class="map-surface">
-          <div class="map-canvas">
+          <div class="map-canvas ${this._aerialCalibrationMode ? "is-aerial-calibrating" : ""}">
             <div class="map-edit-controls">
               <div class="map-edit-primary-row">
                 <button
@@ -1274,7 +1345,7 @@ class S2JYarboMapCard extends HTMLElement {
                 </button>
                 ${this._renderEditModeHints()}
               </div>
-              ${this._editMode && !this._activeEditTool ? `
+              ${this._editMode && !this._activeEditTool && !this._aerialPanelOpen ? `
                 <div class="map-edit-controls-row">
                   <button class="map-button" type="button" data-action="edit-tools">${this._editToolsExpanded ? "−" : "+"}</button>
                   <div class="map-edit-tools ${this._editToolsExpanded ? "is-open" : ""}">
@@ -1289,6 +1360,9 @@ class S2JYarboMapCard extends HTMLElement {
                     </button>
                     <button class="map-button is-icon-only ${this._activeEditTool === "mp" ? "is-active" : ""}" type="button" data-action="tool-mp" aria-label="Memory path" title="Memory path">
                       <ha-icon icon="mdi:memory"></ha-icon>
+                    </button>
+                    <button class="map-button is-icon-only ${this._aerialPanelOpen ? "is-active" : ""}" type="button" data-action="background-image" aria-label="Background image" title="Background image">
+                      <ha-icon icon="mdi:image-edit-outline"></ha-icon>
                     </button>
                   </div>
                 </div>
@@ -1332,6 +1406,16 @@ class S2JYarboMapCard extends HTMLElement {
                 >
                   <ha-icon icon="${this._cloudPointsVisible ? "mdi:boom-gate-outline" : "mdi:boom-gate-up-outline"}"></ha-icon>
                 </button>
+                <button
+                  class="map-button is-icon-only is-icon-outlined ${this._aerialOverlayVisible && entry.aerial_overlay?.image_data ? "is-active" : ""}"
+                  type="button"
+                  data-action="aerial-toggle"
+                  aria-label="${this._aerialOverlayVisible ? "Aerial on" : "Aerial off"}"
+                  title="${this._aerialOverlayVisible ? "Aerial on" : "Aerial off"}"
+                  ${entry.aerial_overlay?.image_data ? "" : "disabled"}
+                >
+                  <ha-icon icon="${this._aerialOverlayVisible ? "mdi:image" : "mdi:image-off"}"></ha-icon>
+                </button>
               `}
               <button class="map-button is-icon-only is-icon-plain is-icon-outlined" type="button" data-action="zoom-in" aria-label="Zoom in" title="Zoom in">
                 <ha-icon icon="mdi:magnify-plus"></ha-icon>
@@ -1361,6 +1445,7 @@ class S2JYarboMapCard extends HTMLElement {
                   ry="${this._number(Math.max(drawing.width, drawing.height) * 0.03)}"
                 />
                 <g transform="scale(1,-1)">
+                  ${this._renderAerialOverlay(entry.aerial_overlay)}
                   ${drawing.areaShapes}
                   ${drawing.fenceShapes}
                   ${drawing.noGoShapes}
@@ -1427,6 +1512,7 @@ class S2JYarboMapCard extends HTMLElement {
             ${this._renderMemoryPathSettingsDialog()}
             ${this._renderUnsavedChangesDialog()}
             ${this._renderEditConfirmationDialog()}
+            ${this._editMode && this._aerialPanelOpen ? this._renderAerialPanel(entry) : ""}
             <div class="map-overlay map-overlay-left">
               <span class="map-reading">${this._escape(this._coords(location.latitude, location.longitude))}</span>
               <span class="map-reading">${this._escape(this._headingText(heading))}</span>
@@ -1440,6 +1526,1476 @@ class S2JYarboMapCard extends HTMLElement {
         ${this._renderEditJsonPanel(entry)}
       </div>
     `;
+  }
+
+  _renderAerialPanel(entry) {
+    const overlay = entry?.aerial_overlay || null;
+    const hasImage = Boolean(overlay?.image_data);
+    const canCalibrate = hasImage;
+    const notice = this._aerialOverlayNotice
+      || (this._aerialCalibrationMode
+        ? "Shift-drag moves the image. Wheel scales. Ctrl-wheel rotates. Save placement when it looks right."
+        : hasImage
+          ? "Open placement to move, scale, and rotate the background image."
+          : "Upload an aerial image, then manually place it.");
+
+    return `
+      <div class="aerial-panel">
+        <div class="aerial-panel-row">
+          <button class="map-button" type="button" data-action="aerial-upload">Upload image</button>
+          <input class="aerial-file-input" type="file" accept="image/*" />
+          <button class="map-button" type="button" data-action="aerial-import">Import placement</button>
+          <input class="aerial-import-input" type="file" accept="application/json,.json" />
+          <button class="map-button" type="button" data-action="aerial-export" ${hasImage ? "" : "disabled"}>Export placement</button>
+          <button class="map-button is-icon-only" type="button" data-action="aerial-rotate-left" aria-label="Rotate left" title="Rotate left" ${hasImage && !this._aerialOverlaySaving ? "" : "disabled"}>
+            <ha-icon icon="mdi:rotate-left"></ha-icon>
+          </button>
+          <button class="map-button is-icon-only" type="button" data-action="aerial-rotate-right" aria-label="Rotate right" title="Rotate right" ${hasImage && !this._aerialOverlaySaving ? "" : "disabled"}>
+            <ha-icon icon="mdi:rotate-right"></ha-icon>
+          </button>
+          <button class="map-button is-icon-only" type="button" data-action="aerial-flip-horizontal" aria-label="Flip horizontal" title="Flip horizontal" ${hasImage && !this._aerialOverlaySaving ? "" : "disabled"}>
+            <ha-icon icon="mdi:flip-horizontal"></ha-icon>
+          </button>
+          <button class="map-button is-icon-only" type="button" data-action="aerial-flip-vertical" aria-label="Flip vertical" title="Flip vertical" ${hasImage && !this._aerialOverlaySaving ? "" : "disabled"}>
+            <ha-icon icon="mdi:flip-vertical"></ha-icon>
+          </button>
+          <button class="map-button ${this._aerialCalibrationMode ? "is-active" : ""}" type="button" data-action="aerial-calibrate" ${hasImage ? "" : "disabled"}>
+            ${this._aerialCalibrationMode ? "Stop placing" : "Place image"}
+          </button>
+          <button class="map-button is-icon-only" type="button" data-action="aerial-panel-close" aria-label="Close background image panel" title="Close">
+            <ha-icon icon="mdi:close"></ha-icon>
+          </button>
+          <button class="map-button" type="button" data-action="aerial-save" ${canCalibrate && !this._aerialOverlaySaving ? "" : "disabled"}>
+            ${this._aerialOverlaySaving ? "Saving..." : "Save placement"}
+          </button>
+          <button class="map-button" type="button" data-action="aerial-clear" ${hasImage ? "" : "disabled"}>Clear</button>
+        </div>
+        <div class="aerial-panel-row">
+          <label class="aerial-notice">
+            Opacity
+            <input class="aerial-opacity" type="range" min="0.1" max="1" step="0.05" value="${this._escape(overlay?.opacity ?? 0.62)}" ${hasImage ? "" : "disabled"} />
+          </label>
+        </div>
+        <div class="aerial-notice ${this._aerialOverlayNotice.startsWith("Failed") ? "error" : ""}">${this._escape(notice)}</div>
+      </div>
+    `;
+  }
+
+  _renderAerialOverlay(overlay) {
+    const transform = this._currentAerialTransform(overlay);
+    if (
+      !this._aerialOverlayVisible
+      || !overlay?.image_data
+      || !transform
+    ) {
+      return this._renderAerialAnchors(overlay);
+    }
+
+    const opacity = Math.max(0.05, Math.min(1, Number(overlay.opacity) || 0.62));
+    const width = Math.max(1, Number(overlay.image_width) || 1);
+    const height = Math.max(1, Number(overlay.image_height) || 1);
+
+    return `
+      <image
+        class="aerial-image ${this._aerialCalibrationMode ? "is-calibrating" : ""}"
+        data-aerial-image="true"
+        href="${this._escape(overlay.image_data)}"
+        x="0"
+        y="0"
+        width="${this._number(width)}"
+        height="${this._number(height)}"
+        opacity="${this._number(opacity)}"
+        preserveAspectRatio="none"
+        transform="matrix(${this._number(transform.a)} ${this._number(transform.b)} ${this._number(transform.c)} ${this._number(transform.d)} ${this._number(transform.e)} ${this._number(transform.f)})"
+      />
+    `;
+  }
+
+  _renderProjectiveAerialOverlay(overlay, transform, width, height, opacity) {
+    const gridSize = 12;
+    const sourceId = this._aerialSvgId("source");
+    const triangles = [];
+
+    for (let row = 0; row < gridSize; row += 1) {
+      const y0 = (height * row) / gridSize;
+      const y1 = (height * (row + 1)) / gridSize;
+      for (let col = 0; col < gridSize; col += 1) {
+        const x0 = (width * col) / gridSize;
+        const x1 = (width * (col + 1)) / gridSize;
+        triangles.push([
+          { x: x0, y: y0 },
+          { x: x1, y: y0 },
+          { x: x1, y: y1 },
+        ]);
+        triangles.push([
+          { x: x0, y: y0 },
+          { x: x1, y: y1 },
+          { x: x0, y: y1 },
+        ]);
+      }
+    }
+
+    const renderedTriangles = triangles
+      .map((sourceTriangle, index) => {
+        const targetTriangle = sourceTriangle.map((point) =>
+          this._transformAerialImagePoint(point, transform),
+        );
+        if (targetTriangle.some((point) => !point)) {
+          return "";
+        }
+
+        const affine = this._affineFromTriangles(sourceTriangle, targetTriangle);
+        if (!affine) {
+          return "";
+        }
+
+        const clipId = this._aerialSvgId(`clip-${index}`);
+        const targetPoints = targetTriangle
+          .map((point) => `${this._number(point.x)},${this._number(point.y)}`)
+          .join(" ");
+        return `
+          <clipPath id="${clipId}" clipPathUnits="userSpaceOnUse">
+            <polygon points="${targetPoints}" />
+          </clipPath>
+          <use
+            class="aerial-image ${this._aerialCalibrationMode ? "is-calibrating" : ""}"
+            href="#${sourceId}"
+            opacity="${this._number(opacity)}"
+            clip-path="url(#${clipId})"
+            transform="matrix(${this._number(affine.a)} ${this._number(affine.b)} ${this._number(affine.c)} ${this._number(affine.d)} ${this._number(affine.e)} ${this._number(affine.f)})"
+          />
+        `;
+      })
+      .join("");
+
+    return `
+      <defs>
+        <image
+          id="${sourceId}"
+          href="${this._escape(overlay.image_data)}"
+          x="0"
+          y="0"
+          width="${this._number(width)}"
+          height="${this._number(height)}"
+          preserveAspectRatio="none"
+        />
+      </defs>
+      ${renderedTriangles}
+    `;
+  }
+
+  _renderMeshAerialOverlay(overlay, points, transform, width, height, opacity) {
+    const vertices = this._aerialMeshVertices(points, transform, width, height);
+    const triangles = this._delaunayTriangles(vertices);
+    if (!vertices.length || !triangles.length) {
+      return this._renderProjectiveAerialOverlay(overlay, transform, width, height, opacity);
+    }
+
+    const renderedTriangles = triangles
+      .map((triangle, index) => {
+        const sourceTriangle = triangle.map((vertexIndex) => vertices[vertexIndex].source);
+        const targetTriangle = triangle.map((vertexIndex) => vertices[vertexIndex].target);
+        if (sourceTriangle.some((point) => !point) || targetTriangle.some((point) => !point)) {
+          return "";
+        }
+
+        const affine = this._affineFromTriangles(sourceTriangle, targetTriangle);
+        if (
+          !affine
+          || ![affine.a, affine.b, affine.c, affine.d, affine.e, affine.f].every(Number.isFinite)
+        ) {
+          return "";
+        }
+
+        const clipId = this._aerialSvgId(`mesh-clip-${index}`);
+        const targetPoints = targetTriangle
+          .map((point) => `${this._number(point.x)},${this._number(point.y)}`)
+          .join(" ");
+        return `
+          <clipPath id="${clipId}" clipPathUnits="userSpaceOnUse">
+            <polygon points="${targetPoints}" />
+          </clipPath>
+          <g clip-path="url(#${clipId})">
+            <image
+              class="aerial-image ${this._aerialCalibrationMode ? "is-calibrating" : ""}"
+              href="${this._escape(overlay.image_data)}"
+              x="0"
+              y="0"
+              width="${this._number(width)}"
+              height="${this._number(height)}"
+              opacity="${this._number(opacity)}"
+              preserveAspectRatio="none"
+              transform="matrix(${this._number(affine.a)} ${this._number(affine.b)} ${this._number(affine.c)} ${this._number(affine.d)} ${this._number(affine.e)} ${this._number(affine.f)})"
+            />
+          </g>
+        `;
+      })
+      .join("");
+
+    return renderedTriangles;
+  }
+
+  _aerialMeshVertices(points, transform, width, height) {
+    const baseTransform = this._baseAerialTransformForMesh(points, transform);
+    const vertices = [
+      { source: { x: 0, y: 0 } },
+      { source: { x: width, y: 0 } },
+      { source: { x: width, y: height } },
+      { source: { x: 0, y: height } },
+    ];
+
+    for (const pair of points) {
+      const source = pair?.image;
+      const target = pair?.map;
+      if (
+        source
+        && target
+        && Number.isFinite(Number(source.x))
+        && Number.isFinite(Number(source.y))
+        && Number.isFinite(Number(target.x))
+        && Number.isFinite(Number(target.y))
+      ) {
+        vertices.push({
+          source: { x: Number(source.x), y: Number(source.y) },
+          target: { x: Number(target.x), y: Number(target.y) },
+        });
+      }
+    }
+
+    return vertices
+      .filter((vertex, index, allVertices) =>
+        allVertices.findIndex((candidate) =>
+          Math.hypot(
+            Number(candidate.source.x) - Number(vertex.source.x),
+            Number(candidate.source.y) - Number(vertex.source.y),
+          ) < 0.001
+        ) === index
+      )
+      .map((vertex) => ({
+        ...vertex,
+        target: vertex.target || this._transformAerialImagePoint(vertex.source, baseTransform),
+      }))
+      .filter((vertex) => vertex.target);
+  }
+
+  _baseAerialTransformForMesh(points, fallbackTransform) {
+    const validPoints = Array.isArray(points)
+      ? points.filter((pair) =>
+          Number.isFinite(Number(pair?.image?.x))
+          && Number.isFinite(Number(pair?.image?.y))
+          && Number.isFinite(Number(pair?.map?.x))
+          && Number.isFinite(Number(pair?.map?.y))
+        )
+      : [];
+    if (validPoints.length < 3) {
+      return fallbackTransform;
+    }
+
+    let bestTriple = validPoints.slice(0, 3);
+    let bestArea = 0;
+    for (let first = 0; first < validPoints.length - 2; first += 1) {
+      for (let second = first + 1; second < validPoints.length - 1; second += 1) {
+        for (let third = second + 1; third < validPoints.length; third += 1) {
+          const area = Math.abs(this._triangleArea(
+            validPoints[first].image,
+            validPoints[second].image,
+            validPoints[third].image,
+          ));
+          if (area > bestArea) {
+            bestArea = area;
+            bestTriple = [validPoints[first], validPoints[second], validPoints[third]];
+          }
+        }
+      }
+    }
+
+    return this._affineAerialTransformFromPoints(bestTriple) || fallbackTransform;
+  }
+
+  _delaunayTriangles(vertices) {
+    if (!Array.isArray(vertices) || vertices.length < 3) {
+      return [];
+    }
+
+    const sourcePoints = vertices.map((vertex) => vertex.source);
+    const bounds = sourcePoints.reduce(
+      (acc, point) => ({
+        minX: Math.min(acc.minX, point.x),
+        minY: Math.min(acc.minY, point.y),
+        maxX: Math.max(acc.maxX, point.x),
+        maxY: Math.max(acc.maxY, point.y),
+      }),
+      { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
+    );
+    const delta = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, 1);
+    const midX = (bounds.minX + bounds.maxX) / 2;
+    const midY = (bounds.minY + bounds.maxY) / 2;
+    const allPoints = [
+      ...sourcePoints,
+      { x: midX - delta * 20, y: midY - delta },
+      { x: midX, y: midY + delta * 20 },
+      { x: midX + delta * 20, y: midY - delta },
+    ];
+    const superStart = sourcePoints.length;
+    let triangles = [[superStart, superStart + 1, superStart + 2]];
+
+    for (let pointIndex = 0; pointIndex < sourcePoints.length; pointIndex += 1) {
+      const point = allPoints[pointIndex];
+      const badTriangles = triangles.filter((triangle) =>
+        this._triangleCircumcircleContains(
+          allPoints[triangle[0]],
+          allPoints[triangle[1]],
+          allPoints[triangle[2]],
+          point,
+        ),
+      );
+      const polygonEdges = [];
+      for (const triangle of badTriangles) {
+        for (const edge of [[triangle[0], triangle[1]], [triangle[1], triangle[2]], [triangle[2], triangle[0]]]) {
+          const existingIndex = polygonEdges.findIndex((candidate) =>
+            candidate[0] === edge[1] && candidate[1] === edge[0]
+          );
+          if (existingIndex >= 0) {
+            polygonEdges.splice(existingIndex, 1);
+          } else {
+            polygonEdges.push(edge);
+          }
+        }
+      }
+      triangles = triangles.filter((triangle) => !badTriangles.includes(triangle));
+      for (const edge of polygonEdges) {
+        triangles.push([edge[0], edge[1], pointIndex]);
+      }
+    }
+
+    return triangles
+      .filter((triangle) => triangle.every((index) => index < sourcePoints.length))
+      .filter((triangle) => Math.abs(this._triangleArea(
+        sourcePoints[triangle[0]],
+        sourcePoints[triangle[1]],
+        sourcePoints[triangle[2]],
+      )) > 0.000001);
+  }
+
+  _triangleCircumcircleContains(a, b, c, point) {
+    const ax = a.x - point.x;
+    const ay = a.y - point.y;
+    const bx = b.x - point.x;
+    const by = b.y - point.y;
+    const cx = c.x - point.x;
+    const cy = c.y - point.y;
+    const determinant =
+      (ax * ax + ay * ay) * (bx * cy - cx * by)
+      - (bx * bx + by * by) * (ax * cy - cx * ay)
+      + (cx * cx + cy * cy) * (ax * by - bx * ay);
+    return this._triangleArea(a, b, c) > 0 ? determinant > 0 : determinant < 0;
+  }
+
+  _triangleArea(a, b, c) {
+    return ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2;
+  }
+
+  _renderAerialAnchors(overlay) {
+    return "";
+  }
+
+  async _uploadAerialImage(file) {
+    if (!this._hass || !this._entry?.entry_id) {
+      this._aerialOverlayNotice = "Home Assistant is not ready to store the aerial image.";
+      this._render();
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      this._aerialOverlayNotice = "Failed: choose an image file.";
+      this._render();
+      return;
+    }
+
+    this._aerialOverlaySaving = true;
+    this._aerialOverlayNotice = "Loading aerial image...";
+    this._render();
+
+    try {
+      const imageData = await this._readFileAsDataUrl(file);
+      const dimensions = await this._imageDimensions(imageData);
+      const overlay = {
+        image_data: imageData,
+        image_width: dimensions.width,
+        image_height: dimensions.height,
+        opacity: this._entry.aerial_overlay?.opacity ?? 0.62,
+        points: [],
+        transform: this._defaultAerialTransform(dimensions.width, dimensions.height),
+      };
+      await this._saveAerialOverlay(overlay);
+      this._aerialCalibrationDraft = [];
+      this._aerialCalibrationTransform = this._normalizeAffineAerialTransform(overlay.transform)
+        || this._defaultAerialTransform(dimensions.width, dimensions.height);
+      this._saveAerialPlacementDraft(this._aerialCalibrationTransform, this._aerialCalibrationDraft);
+      this._aerialPendingImagePoint = null;
+      this._aerialCalibrationStep = "image";
+      this._aerialCalibrationMode = true;
+      this._aerialOverlayVisible = true;
+      this._aerialPanelOpen = true;
+      this._aerialOverlayNotice = "Image uploaded. Shift-drag to move, wheel to scale, Ctrl-wheel to rotate.";
+      this._markAerialPlacementClean();
+    } catch (err) {
+      this._aerialOverlayNotice = `Failed: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      this._aerialOverlaySaving = false;
+      this._render();
+    }
+  }
+
+  _readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => {
+        if (typeof reader.result === "string") {
+          resolve(reader.result);
+        } else {
+          reject(new Error("Could not read image file."));
+        }
+      });
+      reader.addEventListener("error", () => reject(reader.error || new Error("Could not read image file.")));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  _imageDimensions(imageData) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.addEventListener("load", () => {
+        resolve({
+          width: image.naturalWidth || image.width,
+          height: image.naturalHeight || image.height,
+        });
+      });
+      image.addEventListener("error", () => reject(new Error("Could not load image dimensions.")));
+      image.src = imageData;
+    });
+  }
+
+  async _importAerialPlacementFile(file) {
+    if (!file) {
+      return;
+    }
+
+    this._aerialOverlaySaving = true;
+    this._aerialOverlayNotice = "Importing background image placement...";
+    this._render();
+
+    try {
+      const raw = await this._readFileAsText(file);
+      const payload = JSON.parse(raw);
+      const imported = this._normalizeAerialPlacementImport(payload);
+      if (!imported) {
+        throw new Error("The selected file is not a valid S2JYarbo background image placement export.");
+      }
+
+      const currentOverlay = this._entry?.aerial_overlay || null;
+      if (!currentOverlay?.image_data && !imported.image_data) {
+        throw new Error("Upload the background image first, then import its placement data.");
+      }
+
+      const overlay = {
+        ...(currentOverlay || {}),
+        ...(imported.image_data ? { image_data: imported.image_data } : {}),
+        image_width: imported.image_width || currentOverlay?.image_width,
+        image_height: imported.image_height || currentOverlay?.image_height,
+        opacity: imported.opacity ?? currentOverlay?.opacity ?? 0.62,
+        points: [],
+        transform: imported.transform,
+      };
+
+      if (!overlay.image_data || !overlay.image_width || !overlay.image_height) {
+        throw new Error("The import needs either a full image backup or an already uploaded image.");
+      }
+
+      this._entry = {
+        ...this._entry,
+        aerial_overlay: overlay,
+      };
+      this._aerialPanelOpen = true;
+      this._aerialOverlayVisible = true;
+      this._aerialCalibrationMode = true;
+      this._aerialCalibrationTransform = imported.transform;
+      this._aerialCalibrationDraft = [];
+      this._aerialPendingImagePoint = null;
+      this._aerialCalibrationStep = "image";
+      this._saveAerialPlacementDraft(imported.transform, []);
+      this._aerialOverlayNotice = "Placement imported. Review it, then Save placement.";
+    } catch (err) {
+      this._aerialOverlayNotice = `Failed: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      this._aerialOverlaySaving = false;
+      this._render();
+    }
+  }
+
+  _readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => {
+        if (typeof reader.result === "string") {
+          resolve(reader.result);
+        } else {
+          reject(new Error("Could not read import file."));
+        }
+      });
+      reader.addEventListener("error", () => reject(reader.error || new Error("Could not read import file.")));
+      reader.readAsText(file);
+    });
+  }
+
+  _normalizeAerialPlacementImport(payload) {
+    const source = payload?.aerial_overlay || payload?.background_image || payload;
+    const transform = this._normalizeAffineAerialTransform(source?.transform);
+    if (!source || !transform) {
+      return null;
+    }
+
+    const imageWidth = Number(source.image_width ?? source.imageWidth);
+    const imageHeight = Number(source.image_height ?? source.imageHeight);
+    const opacity = Number(source.opacity);
+    const imported = {
+      transform,
+      image_width: Number.isFinite(imageWidth) && imageWidth > 0 ? imageWidth : null,
+      image_height: Number.isFinite(imageHeight) && imageHeight > 0 ? imageHeight : null,
+      opacity: Number.isFinite(opacity) ? Math.max(0.1, Math.min(1, opacity)) : null,
+    };
+    if (typeof source.image_data === "string" && source.image_data.startsWith("data:image/")) {
+      imported.image_data = source.image_data;
+    }
+    return imported;
+  }
+
+  _exportAerialPlacement() {
+    const overlay = this._entry?.aerial_overlay;
+    const transform = this._currentAerialTransform(overlay);
+    if (!overlay?.image_data || !transform) {
+      this._aerialOverlayNotice = "Upload a background image before exporting placement data.";
+      this._render();
+      return;
+    }
+
+    const payload = {
+      type: "s2jyarbo-background-image-placement",
+      version: 1,
+      exported_at: new Date().toISOString(),
+      entry_id: this._entry?.entry_id || null,
+      image_width: Number(overlay.image_width) || null,
+      image_height: Number(overlay.image_height) || null,
+      opacity: Number.isFinite(Number(overlay.opacity)) ? Number(overlay.opacity) : 0.62,
+      transform: this._normalizeAffineAerialTransform(transform),
+    };
+    const safeName = String(this._entry?.title || this._entry?.entry_id || "yarbo")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      || "yarbo";
+    this._downloadJson(`${safeName}-background-image-placement.json`, payload);
+    this._aerialOverlayNotice = "Placement exported.";
+    this._render();
+  }
+
+  _downloadJson(filename, payload) {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.style.display = "none";
+    this.shadowRoot?.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  _defaultAerialTransform(width, height) {
+    const drawing = this._lastDrawing;
+    const imageWidth = Math.max(1, Number(width) || 1);
+    const imageHeight = Math.max(1, Number(height) || 1);
+    if (!drawing) {
+      return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+    }
+
+    const scale = Math.min(
+      drawing.viewBoxWidth / imageWidth,
+      drawing.viewBoxHeight / imageHeight,
+    );
+    return {
+      a: scale,
+      b: 0,
+      c: 0,
+      d: scale,
+      e: drawing.viewBoxX + (drawing.viewBoxWidth - imageWidth * scale) / 2,
+      f: -drawing.viewBoxY - drawing.viewBoxHeight + (drawing.viewBoxHeight - imageHeight * scale) / 2,
+    };
+  }
+
+  _toggleAerialCalibrationMode() {
+    const overlay = this._entry?.aerial_overlay;
+    if (!overlay?.image_data) {
+      return;
+    }
+
+    this._aerialCalibrationMode = !this._aerialCalibrationMode;
+    this._aerialCalibrationDraft = this._aerialCalibrationMode && Array.isArray(overlay.points)
+      ? overlay.points.map((pair) => ({
+          image: { ...pair.image },
+          map: { ...pair.map },
+        }))
+      : [];
+    if (this._aerialCalibrationMode) {
+      const storedDraft = this._loadAerialPlacementDraft(overlay);
+      this._aerialCalibrationDraft = storedDraft?.points?.length
+        ? storedDraft.points
+        : this._aerialCalibrationDraft;
+      this._aerialCalibrationTransform = storedDraft?.transform
+        || this._normalizeAffineAerialTransform(overlay.transform)
+        || this._defaultAerialTransform(overlay.image_width, overlay.image_height);
+      this._saveAerialPlacementDraft(this._aerialCalibrationTransform, this._aerialCalibrationDraft);
+    } else {
+      this._clearAerialPlacementDraft();
+      this._aerialCalibrationTransform = null;
+    }
+    this._aerialPendingImagePoint = null;
+    this._aerialCalibrationStep = "image";
+    this._aerialOverlayNotice = this._aerialCalibrationMode
+      ? "Manually place the image. Shift-drag moves it, wheel scales it, Ctrl-wheel rotates it."
+      : "Background image placement paused.";
+    this._render();
+  }
+
+  _closeAerialPanel() {
+    if (this._hasUnsavedAerialPlacementChanges()) {
+      this._openUnsavedChangesDialog("close-aerial-panel");
+      return;
+    }
+
+    this._aerialPanelOpen = false;
+    this._aerialCalibrationMode = false;
+    this._aerialCalibrationTransform = null;
+    this._aerialPendingImagePoint = null;
+    this._aerialCalibrationStep = "image";
+    this._clearAerialPlacementDraft();
+    this._aerialOverlayNotice = "";
+    this._render();
+  }
+
+  async _saveAerialCalibration() {
+    const overlay = this._entry?.aerial_overlay;
+    const transform = this._currentAerialTransform(overlay);
+    if (!overlay?.image_data || !transform) {
+      return;
+    }
+
+    this._aerialOverlaySaving = true;
+    this._render();
+    try {
+      await this._saveAerialOverlay({
+        ...overlay,
+        points: [],
+        transform,
+      });
+      this._aerialCalibrationMode = false;
+      this._clearAerialPlacementDraft();
+      this._aerialCalibrationTransform = null;
+      this._aerialPendingImagePoint = null;
+      this._aerialCalibrationStep = "image";
+      this._aerialCalibrationDraft = [];
+      this._aerialOverlayNotice = "Aerial image placement saved.";
+      this._markAerialPlacementClean();
+      return true;
+    } catch (err) {
+      this._aerialOverlayNotice = `Failed: ${err instanceof Error ? err.message : String(err)}`;
+      return false;
+    } finally {
+      this._aerialOverlaySaving = false;
+      this._render();
+    }
+  }
+
+  async _updateAerialOpacity(opacity) {
+    const overlay = this._entry?.aerial_overlay;
+    if (!overlay?.image_data) {
+      return;
+    }
+
+    try {
+      await this._saveAerialOverlay({
+        ...overlay,
+        opacity: Math.max(0.1, Math.min(1, Number(opacity) || 0.62)),
+      });
+      this._markAerialPlacementClean();
+    } catch (err) {
+      this._aerialOverlayNotice = `Failed: ${err instanceof Error ? err.message : String(err)}`;
+      this._render();
+    }
+  }
+
+  _currentAerialTransform(overlay = this._entry?.aerial_overlay) {
+    if (this._aerialCalibrationMode && this._aerialCalibrationTransform) {
+      return this._aerialCalibrationTransform;
+    }
+    const storedDraft = this._loadAerialPlacementDraft(overlay);
+    if (storedDraft?.transform) {
+      if (!this._aerialCalibrationTransform) {
+        this._aerialCalibrationTransform = storedDraft.transform;
+      }
+      if (!this._aerialCalibrationDraft.length && Array.isArray(storedDraft.points)) {
+        this._aerialCalibrationDraft = storedDraft.points;
+      }
+      return storedDraft.transform;
+    }
+    return overlay?.transform || null;
+  }
+
+  _aerialPlacementDraftKey(overlay = this._entry?.aerial_overlay) {
+    const entryId = this._entry?.entry_id;
+    if (!entryId || !overlay?.image_data) {
+      return "";
+    }
+    return `s2jyarbo:aerial-placement:${entryId}`;
+  }
+
+  _saveAerialPlacementDraft(transform, points = this._aerialCalibrationDraft) {
+    const key = this._aerialPlacementDraftKey();
+    const normalized = this._normalizeAffineAerialTransform(transform);
+    if (!key || !normalized) {
+      return;
+    }
+
+    try {
+      window.sessionStorage?.setItem(
+        key,
+        JSON.stringify({
+          transform: normalized,
+          points: Array.isArray(points) ? points : [],
+          updated_at: Date.now(),
+        }),
+      );
+    } catch (_err) {
+      // Placement still works without session storage; it just cannot survive parent refreshes.
+    }
+  }
+
+  _loadAerialPlacementDraft(overlay = this._entry?.aerial_overlay) {
+    const key = this._aerialPlacementDraftKey(overlay);
+    if (!key) {
+      return null;
+    }
+
+    try {
+      const raw = window.sessionStorage?.getItem(key);
+      if (!raw) {
+        return null;
+      }
+      const parsed = JSON.parse(raw);
+      if (Date.now() - Number(parsed?.updated_at || 0) > 30 * 60 * 1000) {
+        window.sessionStorage?.removeItem(key);
+        return null;
+      }
+      const transform = this._normalizeAffineAerialTransform(parsed?.transform);
+      if (!transform) {
+        return null;
+      }
+      const points = Array.isArray(parsed?.points)
+        ? parsed.points
+            .filter((pair) =>
+              Number.isFinite(Number(pair?.image?.x))
+              && Number.isFinite(Number(pair?.image?.y))
+              && Number.isFinite(Number(pair?.map?.x))
+              && Number.isFinite(Number(pair?.map?.y))
+            )
+            .map((pair) => ({
+              image: { x: Number(pair.image.x), y: Number(pair.image.y) },
+              map: { x: Number(pair.map.x), y: Number(pair.map.y) },
+            }))
+        : [];
+      return { transform, points };
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  _clearAerialPlacementDraft() {
+    const key = this._aerialPlacementDraftKey();
+    if (!key) {
+      return;
+    }
+    try {
+      window.sessionStorage?.removeItem(key);
+    } catch (_err) {
+      // No-op.
+    }
+  }
+
+  _aerialPlacementSignature() {
+    const overlay = this._entry?.aerial_overlay || null;
+    const transform = this._currentAerialTransform(overlay);
+    return JSON.stringify({
+      hasImage: Boolean(overlay?.image_data),
+      imageWidth: Number.isFinite(Number(overlay?.image_width)) ? Number(overlay.image_width) : null,
+      imageHeight: Number.isFinite(Number(overlay?.image_height)) ? Number(overlay.image_height) : null,
+      opacity: Number.isFinite(Number(overlay?.opacity)) ? Number(overlay.opacity) : null,
+      transform: transform ? this._normalizeAffineAerialTransform(transform) : null,
+    });
+  }
+
+  _cloneAerialOverlay(overlay = this._entry?.aerial_overlay) {
+    if (!overlay) {
+      return null;
+    }
+
+    return {
+      ...overlay,
+      points: Array.isArray(overlay.points)
+        ? overlay.points.map((pair) => ({
+            image: pair?.image ? { ...pair.image } : null,
+            map: pair?.map ? { ...pair.map } : null,
+          }))
+        : [],
+      transform: overlay.transform ? { ...overlay.transform } : null,
+    };
+  }
+
+  _markAerialPlacementClean() {
+    this._aerialPlacementOriginalSignature = this._aerialPlacementSignature();
+    this._aerialPlacementOriginalOverlay = this._cloneAerialOverlay();
+  }
+
+  _hasUnsavedAerialPlacementChanges() {
+    if (!this._editMode || !this._aerialPanelOpen) {
+      return false;
+    }
+
+    if (!this._aerialPlacementOriginalSignature) {
+      this._markAerialPlacementClean();
+      return false;
+    }
+
+    return this._aerialPlacementSignature() !== this._aerialPlacementOriginalSignature;
+  }
+
+  _discardAerialPlacementChanges(options = {}) {
+    const { render = true } = options;
+    if (this._entry) {
+      this._entry = {
+        ...this._entry,
+        aerial_overlay: this._cloneAerialOverlay(this._aerialPlacementOriginalOverlay),
+      };
+    }
+    this._aerialCalibrationMode = false;
+    this._aerialCalibrationTransform = null;
+    this._aerialCalibrationDraft = [];
+    this._aerialPendingImagePoint = null;
+    this._aerialCalibrationStep = "image";
+    this._aerialPanelOpen = false;
+    this._clearAerialPlacementDraft();
+    this._aerialOverlayNotice = "";
+    this._markAerialPlacementClean();
+    if (render) {
+      this._render();
+    }
+  }
+
+  _setAerialOverlayTransform(transform, points = this._aerialCalibrationDraft) {
+    const overlay = this._entry?.aerial_overlay;
+    if (!overlay?.image_data || !transform) {
+      return false;
+    }
+
+    const normalized = this._normalizeAffineAerialTransform(transform);
+    if (!normalized) {
+      return false;
+    }
+
+    if (this._aerialCalibrationMode) {
+      this._aerialCalibrationTransform = normalized;
+      this._saveAerialPlacementDraft(normalized, points);
+    }
+
+    this._entry = {
+      ...this._entry,
+      aerial_overlay: {
+        ...overlay,
+        points: Array.isArray(points) ? points : [],
+        transform: normalized,
+      },
+    };
+    return true;
+  }
+
+  _normalizeAffineAerialTransform(transform) {
+    const normalized = {
+      a: Number(transform.a),
+      b: Number(transform.b),
+      c: Number(transform.c),
+      d: Number(transform.d),
+      e: Number(transform.e),
+      f: Number(transform.f),
+    };
+    return Object.values(normalized).every(Number.isFinite) ? normalized : null;
+  }
+
+  _adjustAerialTransformInPlace(operation, notice) {
+    const overlay = this._entry?.aerial_overlay;
+    const baseTransform = this._currentAerialTransform(overlay);
+    if (!overlay?.image_data || !baseTransform) {
+      return false;
+    }
+
+    const transform = this._multiplyAerialAffineMatrices(operation, baseTransform);
+    if (!this._setAerialOverlayTransform(transform)) {
+      this._aerialOverlayNotice = "Failed: could not adjust aerial image.";
+      this._render();
+      return false;
+    }
+
+    this._aerialOverlayNotice = notice;
+    this._render();
+    return true;
+  }
+
+  _translateAerialOverlay(deltaX, deltaY) {
+    return this._adjustAerialTransformInPlace(
+      { a: 1, b: 0, c: 0, d: 1, e: deltaX, f: deltaY },
+      "Aerial image moved. Save placement when it looks right.",
+    );
+  }
+
+  _scaleAerialOverlayAt(anchor, scaleFactor) {
+    const factor = Math.max(0.2, Math.min(5, Number(scaleFactor) || 1));
+    if (!anchor || Math.abs(factor - 1) < 0.000001) {
+      return false;
+    }
+    return this._adjustAerialTransformAroundCursor(
+      anchor,
+      {
+        a: factor,
+        b: 0,
+        c: 0,
+        d: factor,
+        e: Number(anchor.x) - factor * Number(anchor.x),
+        f: Number(anchor.y) - factor * Number(anchor.y),
+      },
+      "Aerial image scaled. Save placement when it looks right.",
+    );
+  }
+
+  _rotateAerialOverlayAt(anchor, deltaAngle) {
+    const angle = Number(deltaAngle);
+    if (!anchor || !Number.isFinite(angle) || Math.abs(angle) < 0.000001) {
+      return false;
+    }
+
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return this._adjustAerialTransformAroundCursor(
+      anchor,
+      {
+        a: cos,
+        b: sin,
+        c: -sin,
+        d: cos,
+        e: Number(anchor.x) - cos * Number(anchor.x) + sin * Number(anchor.y),
+        f: Number(anchor.y) - sin * Number(anchor.x) - cos * Number(anchor.y),
+      },
+      "Aerial image rotated. Save placement when it looks right.",
+    );
+  }
+
+  _adjustAerialTransformAroundCursor(anchor, operation, notice) {
+    const overlay = this._entry?.aerial_overlay;
+    const baseTransform = this._currentAerialTransform(overlay);
+    if (!overlay?.image_data || !baseTransform || !anchor || !operation) {
+      return false;
+    }
+
+    const imageAnchor = this._inverseTransformAerialPoint(anchor, baseTransform);
+    if (!imageAnchor) {
+      return false;
+    }
+
+    const nextTransform = this._multiplyAerialAffineMatrices(operation, baseTransform);
+    if (!nextTransform) {
+      return false;
+    }
+
+    const movedAnchor = this._transformAerialImagePoint(imageAnchor, nextTransform);
+    if (!movedAnchor) {
+      return false;
+    }
+
+    nextTransform.e += Number(anchor.x) - Number(movedAnchor.x);
+    nextTransform.f += Number(anchor.y) - Number(movedAnchor.y);
+    if (!this._setAerialOverlayTransform(nextTransform)) {
+      this._aerialOverlayNotice = "Failed: could not adjust aerial image.";
+      this._render();
+      return false;
+    }
+
+    this._aerialOverlayNotice = notice;
+    this._render();
+    return true;
+  }
+
+  async _adjustAerialTransform(action) {
+    const overlay = this._entry?.aerial_overlay;
+    if (!overlay?.image_data || this._aerialOverlaySaving) {
+      return;
+    }
+
+    const transform = this._aerialAdjustmentTransform(overlay, action);
+    if (!transform) {
+      this._aerialOverlayNotice = "Failed: could not adjust aerial image.";
+      this._render();
+      return;
+    }
+
+    this._aerialOverlaySaving = true;
+    this._render();
+    try {
+      await this._saveAerialOverlay({
+        ...overlay,
+        points: [],
+        transform,
+      });
+      this._aerialCalibrationDraft = [];
+      this._aerialPendingImagePoint = null;
+      this._aerialCalibrationStep = "image";
+      this._aerialCalibrationMode = true;
+      this._aerialOverlayVisible = true;
+      this._aerialOverlayNotice = "Image adjusted. Continue manual placement or save.";
+    } catch (err) {
+      this._aerialOverlayNotice = `Failed: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      this._aerialOverlaySaving = false;
+      this._render();
+    }
+  }
+
+  _aerialAdjustmentTransform(overlay, action) {
+    const base = overlay.transform || this._defaultAerialTransform(
+      overlay.image_width,
+      overlay.image_height,
+    );
+    const width = Math.max(1, Number(overlay.image_width) || 1);
+    const height = Math.max(1, Number(overlay.image_height) || 1);
+    const cx = width / 2;
+    const cy = height / 2;
+    const operation = this._aerialImageSpaceOperation(action, cx, cy);
+    return operation ? this._multiplyAerialMatrices(base, operation) : null;
+  }
+
+  _aerialImageSpaceOperation(action, cx, cy) {
+    let linear = null;
+    if (action === "rotate-left") {
+      linear = { a: 0, b: -1, c: 1, d: 0, e: 0, f: 0 };
+    } else if (action === "rotate-right") {
+      linear = { a: 0, b: 1, c: -1, d: 0, e: 0, f: 0 };
+    } else if (action === "flip-horizontal") {
+      linear = { a: -1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+    } else if (action === "flip-vertical") {
+      linear = { a: 1, b: 0, c: 0, d: -1, e: 0, f: 0 };
+    }
+    if (!linear) {
+      return null;
+    }
+
+    const translated = this._multiplyAerialMatrices(
+      { a: 1, b: 0, c: 0, d: 1, e: cx, f: cy },
+      linear,
+    );
+    return translated
+      ? this._multiplyAerialMatrices(
+          translated,
+          { a: 1, b: 0, c: 0, d: 1, e: -cx, f: -cy },
+        )
+      : null;
+  }
+
+  _multiplyAerialMatrices(left, right) {
+    if (!left || !right) {
+      return null;
+    }
+    const a =
+      Number(left.a) * Number(right.a)
+      + Number(left.c) * Number(right.b)
+      + Number(left.e) * Number(right.g || 0);
+    const b =
+      Number(left.b) * Number(right.a)
+      + Number(left.d) * Number(right.b)
+      + Number(left.f) * Number(right.g || 0);
+    const c =
+      Number(left.a) * Number(right.c)
+      + Number(left.c) * Number(right.d)
+      + Number(left.e) * Number(right.h || 0);
+    const d =
+      Number(left.b) * Number(right.c)
+      + Number(left.d) * Number(right.d)
+      + Number(left.f) * Number(right.h || 0);
+    const e =
+      Number(left.a) * Number(right.e)
+      + Number(left.c) * Number(right.f)
+      + Number(left.e);
+    const f =
+      Number(left.b) * Number(right.e)
+      + Number(left.d) * Number(right.f)
+      + Number(left.f);
+    const g =
+      Number(left.g || 0) * Number(right.a)
+      + Number(left.h || 0) * Number(right.b)
+      + Number(right.g || 0);
+    const h =
+      Number(left.g || 0) * Number(right.c)
+      + Number(left.h || 0) * Number(right.d)
+      + Number(right.h || 0);
+    const i =
+      Number(left.g || 0) * Number(right.e)
+      + Number(left.h || 0) * Number(right.f)
+      + 1;
+    if (!Number.isFinite(i) || Math.abs(i) < 1e-12) {
+      return null;
+    }
+    const result = {
+      a: a / i,
+      b: b / i,
+      c: c / i,
+      d: d / i,
+      e: e / i,
+      f: f / i,
+    };
+    if (Math.abs(g / i) > 1e-12) {
+      result.g = g / i;
+    }
+    if (Math.abs(h / i) > 1e-12) {
+      result.h = h / i;
+    }
+    return result;
+  }
+
+  _multiplyAerialAffineMatrices(left, right) {
+    return {
+      a: Number(left.a) * Number(right.a) + Number(left.c) * Number(right.b),
+      b: Number(left.b) * Number(right.a) + Number(left.d) * Number(right.b),
+      c: Number(left.a) * Number(right.c) + Number(left.c) * Number(right.d),
+      d: Number(left.b) * Number(right.c) + Number(left.d) * Number(right.d),
+      e: Number(left.a) * Number(right.e) + Number(left.c) * Number(right.f) + Number(left.e),
+      f: Number(left.b) * Number(right.e) + Number(left.d) * Number(right.f) + Number(left.f),
+    };
+  }
+
+  async _clearAerialOverlay() {
+    if (!this._hass || !this._entry?.entry_id) {
+      return;
+    }
+
+    this._aerialOverlaySaving = true;
+    this._render();
+    try {
+      await this._hass.callApi(
+        "DELETE",
+        `s2jyarbo/aerial_overlay?entry_id=${encodeURIComponent(this._entry.entry_id)}`,
+      );
+      this._entry = {
+        ...this._entry,
+        aerial_overlay: null,
+      };
+      this._aerialCalibrationMode = false;
+      this._aerialCalibrationDraft = [];
+      this._aerialCalibrationTransform = null;
+      this._clearAerialPlacementDraft();
+      this._aerialPendingImagePoint = null;
+      this._aerialOverlayNotice = "Aerial overlay cleared.";
+      this._aerialPanelOpen = false;
+      this._markAerialPlacementClean();
+    } catch (err) {
+      this._aerialOverlayNotice = `Failed: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      this._aerialOverlaySaving = false;
+      this._render();
+    }
+  }
+
+  _confirmClearAerialOverlay() {
+    if (!this._entry?.aerial_overlay?.image_data) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Clear the saved background image and its placement for this map?",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    void this._clearAerialOverlay();
+  }
+
+  async _saveAerialOverlay(overlay) {
+    if (!this._hass || !this._entry?.entry_id) {
+      throw new Error("Home Assistant is not ready.");
+    }
+
+    const response = await this._hass.callApi("POST", "s2jyarbo/aerial_overlay", {
+      entry_id: this._entry.entry_id,
+      aerial_overlay: overlay,
+    });
+    this._entry = {
+      ...this._entry,
+      aerial_overlay: response?.aerial_overlay || overlay,
+    };
+  }
+
+  _displayPointFromSvgEvent(svg, event) {
+    const localPoint = this._localPointFromSvgEvent(svg, event);
+    return localPoint ? this._displayPoint(localPoint) : null;
+  }
+
+  _aerialTransformFromPoints(points) {
+    if (!Array.isArray(points) || points.length < 3) {
+      return null;
+    }
+
+    return this._affineAerialTransformFromPoints(points);
+  }
+
+  _affineAerialTransformFromPoints(points) {
+    if (!Array.isArray(points) || points.length < 3) {
+      return null;
+    }
+    const ata = Array.from({ length: 6 }, () => Array(6).fill(0));
+    const atb = Array(6).fill(0);
+    for (const pair of points) {
+      const imageX = Number(pair?.image?.x);
+      const imageY = Number(pair?.image?.y);
+      const mapX = Number(pair?.map?.x);
+      const mapY = Number(pair?.map?.y);
+      if (![imageX, imageY, mapX, mapY].every(Number.isFinite)) {
+        continue;
+      }
+
+      const rows = [
+        [[imageX, imageY, 1, 0, 0, 0], mapX],
+        [[0, 0, 0, imageX, imageY, 1], mapY],
+      ];
+      for (const [row, target] of rows) {
+        for (let rowIndex = 0; rowIndex < 6; rowIndex += 1) {
+          atb[rowIndex] += row[rowIndex] * target;
+          for (let colIndex = 0; colIndex < 6; colIndex += 1) {
+            ata[rowIndex][colIndex] += row[rowIndex] * row[colIndex];
+          }
+        }
+      }
+    }
+
+    const solved = this._solveLinearSystem(ata, atb);
+    return solved
+      ? { a: solved[0], c: solved[1], e: solved[2], b: solved[3], d: solved[4], f: solved[5] }
+      : null;
+  }
+
+  _projectiveAerialTransformFromPoints(points) {
+    const ata = Array.from({ length: 8 }, () => Array(8).fill(0));
+    const atb = Array(8).fill(0);
+
+    for (const pair of points) {
+      const imageX = Number(pair?.image?.x);
+      const imageY = Number(pair?.image?.y);
+      const mapX = Number(pair?.map?.x);
+      const mapY = Number(pair?.map?.y);
+      if (![imageX, imageY, mapX, mapY].every(Number.isFinite)) {
+        continue;
+      }
+
+      const rows = [
+        [[imageX, imageY, 1, 0, 0, 0, -mapX * imageX, -mapX * imageY], mapX],
+        [[0, 0, 0, imageX, imageY, 1, -mapY * imageX, -mapY * imageY], mapY],
+      ];
+      for (const [row, target] of rows) {
+        for (let rowIndex = 0; rowIndex < 8; rowIndex += 1) {
+          atb[rowIndex] += row[rowIndex] * target;
+          for (let colIndex = 0; colIndex < 8; colIndex += 1) {
+            ata[rowIndex][colIndex] += row[rowIndex] * row[colIndex];
+          }
+        }
+      }
+    }
+
+    const solved = this._solveLinearSystem(ata, atb);
+    return solved
+      ? {
+          a: solved[0],
+          c: solved[1],
+          e: solved[2],
+          b: solved[3],
+          d: solved[4],
+          f: solved[5],
+          g: solved[6],
+          h: solved[7],
+        }
+      : null;
+  }
+
+  _solveLinearSystem(matrix, vector) {
+    const size = vector.length;
+    const augmented = matrix.map((row, index) => [...row, vector[index]]);
+
+    for (let pivotIndex = 0; pivotIndex < size; pivotIndex += 1) {
+      let bestRow = pivotIndex;
+      for (let rowIndex = pivotIndex + 1; rowIndex < size; rowIndex += 1) {
+        if (Math.abs(augmented[rowIndex][pivotIndex]) > Math.abs(augmented[bestRow][pivotIndex])) {
+          bestRow = rowIndex;
+        }
+      }
+      if (Math.abs(augmented[bestRow][pivotIndex]) < 1e-9) {
+        return null;
+      }
+      if (bestRow !== pivotIndex) {
+        [augmented[pivotIndex], augmented[bestRow]] = [augmented[bestRow], augmented[pivotIndex]];
+      }
+
+      const pivot = augmented[pivotIndex][pivotIndex];
+      for (let colIndex = pivotIndex; colIndex <= size; colIndex += 1) {
+        augmented[pivotIndex][colIndex] /= pivot;
+      }
+
+      for (let rowIndex = 0; rowIndex < size; rowIndex += 1) {
+        if (rowIndex === pivotIndex) {
+          continue;
+        }
+        const factor = augmented[rowIndex][pivotIndex];
+        for (let colIndex = pivotIndex; colIndex <= size; colIndex += 1) {
+          augmented[rowIndex][colIndex] -= factor * augmented[pivotIndex][colIndex];
+        }
+      }
+    }
+
+    return augmented.map((row) => row[size]);
+  }
+
+  _transformAerialImagePoint(point, transform) {
+    if (!point || !transform) {
+      return null;
+    }
+    const x = Number(point.x);
+    const y = Number(point.y);
+    const denominator = Number(transform.g || 0) * x + Number(transform.h || 0) * y + 1;
+    if (!Number.isFinite(denominator) || Math.abs(denominator) < 1e-9) {
+      return null;
+    }
+    return {
+      x: (Number(transform.a) * x + Number(transform.c) * y + Number(transform.e)) / denominator,
+      y: (Number(transform.b) * x + Number(transform.d) * y + Number(transform.f)) / denominator,
+    };
+  }
+
+  _inverseTransformAerialPoint(point, transform) {
+    if (!point || !transform) {
+      return null;
+    }
+    const inverse = this._invertAerialMatrix(transform);
+    if (!inverse) {
+      return null;
+    }
+    return this._transformAerialImagePoint(point, inverse);
+  }
+
+  _isProjectiveAerialTransform(transform) {
+    return Boolean(
+      transform
+      && (Math.abs(Number(transform.g) || 0) > 1e-12 || Math.abs(Number(transform.h) || 0) > 1e-12)
+    );
+  }
+
+  _invertAerialMatrix(transform) {
+    const a = Number(transform.a);
+    const b = Number(transform.b);
+    const c = Number(transform.c);
+    const d = Number(transform.d);
+    const e = Number(transform.e);
+    const f = Number(transform.f);
+    const g = Number(transform.g || 0);
+    const h = Number(transform.h || 0);
+    const determinant =
+      a * (d - f * h)
+      - c * (b - f * g)
+      + e * (b * h - d * g);
+    if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-9) {
+      return null;
+    }
+    const bottomRight = (a * d - c * b) / determinant;
+    if (!Number.isFinite(bottomRight) || Math.abs(bottomRight) < 1e-12) {
+      return null;
+    }
+    return this._normalizeAerialMatrix({
+      a: (d - f * h) / determinant,
+      c: (e * h - c) / determinant,
+      e: (c * f - e * d) / determinant,
+      b: (f * g - b) / determinant,
+      d: (a - e * g) / determinant,
+      f: (e * b - a * f) / determinant,
+      g: (b * h - d * g) / determinant,
+      h: (c * g - a * h) / determinant,
+      i: bottomRight,
+    });
+  }
+
+  _normalizeAerialMatrix(transform) {
+    const bottomRight = Number(transform.i ?? 1);
+    if (!Number.isFinite(bottomRight) || Math.abs(bottomRight) < 1e-12) {
+      return null;
+    }
+    const normalized = {
+      a: Number(transform.a) / bottomRight,
+      b: Number(transform.b) / bottomRight,
+      c: Number(transform.c) / bottomRight,
+      d: Number(transform.d) / bottomRight,
+      e: Number(transform.e) / bottomRight,
+      f: Number(transform.f) / bottomRight,
+    };
+    const g = Number(transform.g || 0) / bottomRight;
+    const h = Number(transform.h || 0) / bottomRight;
+    if (Math.abs(g) > 1e-12) {
+      normalized.g = g;
+    }
+    if (Math.abs(h) > 1e-12) {
+      normalized.h = h;
+    }
+    return normalized;
+  }
+
+  _aerialSvgId(suffix) {
+    const entryId = this._entry?.entry_id || "entry";
+    return `s2jyarbo-aerial-${entryId}-${suffix}`.replace(/[^a-zA-Z0-9_-]/g, "-");
+  }
+
+  _affineFromTriangles(sourceTriangle, targetTriangle) {
+    const matrix = [
+      [sourceTriangle[0].x, sourceTriangle[0].y, 1, 0, 0, 0],
+      [0, 0, 0, sourceTriangle[0].x, sourceTriangle[0].y, 1],
+      [sourceTriangle[1].x, sourceTriangle[1].y, 1, 0, 0, 0],
+      [0, 0, 0, sourceTriangle[1].x, sourceTriangle[1].y, 1],
+      [sourceTriangle[2].x, sourceTriangle[2].y, 1, 0, 0, 0],
+      [0, 0, 0, sourceTriangle[2].x, sourceTriangle[2].y, 1],
+    ];
+    const vector = [
+      targetTriangle[0].x,
+      targetTriangle[0].y,
+      targetTriangle[1].x,
+      targetTriangle[1].y,
+      targetTriangle[2].x,
+      targetTriangle[2].y,
+    ];
+    const solved = this._solveLinearSystem(matrix, vector);
+    return solved
+      ? { a: solved[0], c: solved[1], e: solved[2], b: solved[3], d: solved[4], f: solved[5] }
+      : null;
   }
 
   _bindControls() {
@@ -1471,6 +3027,93 @@ class S2JYarboMapCard extends HTMLElement {
       this._render();
     });
 
+    body.querySelector('[data-action="aerial-toggle"]')?.addEventListener("click", () => {
+      this._aerialOverlayVisible = !this._aerialOverlayVisible;
+      this._render();
+    });
+
+    body.querySelector('[data-action="aerial-upload"]')?.addEventListener("click", () => {
+      const input = body.querySelector(".aerial-file-input");
+      if (input instanceof HTMLInputElement) {
+        input.click();
+      }
+    });
+
+    const aerialFileInput = body.querySelector(".aerial-file-input");
+    if (aerialFileInput instanceof HTMLInputElement) {
+      aerialFileInput.addEventListener("change", (event) => {
+        const file = event.currentTarget.files?.[0] || null;
+        if (file) {
+          void this._uploadAerialImage(file);
+        }
+        event.currentTarget.value = "";
+      });
+    }
+
+    body.querySelector('[data-action="aerial-import"]')?.addEventListener("click", () => {
+      const input = body.querySelector(".aerial-import-input");
+      if (input instanceof HTMLInputElement) {
+        input.click();
+      }
+    });
+
+    const aerialImportInput = body.querySelector(".aerial-import-input");
+    if (aerialImportInput instanceof HTMLInputElement) {
+      aerialImportInput.addEventListener("change", (event) => {
+        const file = event.currentTarget.files?.[0] || null;
+        if (file) {
+          void this._importAerialPlacementFile(file);
+        }
+        event.currentTarget.value = "";
+      });
+    }
+
+    body.querySelector('[data-action="aerial-export"]')?.addEventListener("click", () => {
+      this._exportAerialPlacement();
+    });
+
+    const aerialOpacity = body.querySelector(".aerial-opacity");
+    if (aerialOpacity instanceof HTMLInputElement) {
+      aerialOpacity.addEventListener("change", (event) => {
+        const value = event.currentTarget instanceof HTMLInputElement
+          ? Number(event.currentTarget.value)
+          : 0.62;
+        void this._updateAerialOpacity(value);
+      });
+    }
+
+    body.querySelector('[data-action="aerial-rotate-left"]')?.addEventListener("click", () => {
+      void this._adjustAerialTransform("rotate-left");
+    });
+
+    body.querySelector('[data-action="aerial-rotate-right"]')?.addEventListener("click", () => {
+      void this._adjustAerialTransform("rotate-right");
+    });
+
+    body.querySelector('[data-action="aerial-flip-horizontal"]')?.addEventListener("click", () => {
+      void this._adjustAerialTransform("flip-horizontal");
+    });
+
+    body.querySelector('[data-action="aerial-flip-vertical"]')?.addEventListener("click", () => {
+      void this._adjustAerialTransform("flip-vertical");
+    });
+
+    body.querySelector('[data-action="aerial-calibrate"]')?.addEventListener("click", () => {
+      this._toggleAerialCalibrationMode();
+    });
+
+    body.querySelector('[data-action="aerial-panel-close"]')?.addEventListener("click", () => {
+      this._closeAerialPanel();
+    });
+
+    body.querySelector('[data-action="aerial-save"]')?.addEventListener("click", () => {
+      void this._saveAerialCalibration();
+    });
+
+    body.querySelector('[data-action="aerial-clear"]')?.addEventListener("click", () => {
+      this._confirmClearAerialOverlay();
+    });
+
     body.querySelector('[data-action="edit-mode"]')?.addEventListener("click", () => {
       void this._handleEditModeButtonClick();
     });
@@ -1500,6 +3143,20 @@ class S2JYarboMapCard extends HTMLElement {
         return;
       }
       this._editToolsExpanded = !this._editToolsExpanded;
+      this._render();
+    });
+
+    body.querySelector('[data-action="background-image"]')?.addEventListener("click", () => {
+      if (!this._editMode) {
+        return;
+      }
+      if (this._aerialPanelOpen) {
+        this._closeAerialPanel();
+        return;
+      }
+      this._aerialPanelOpen = true;
+      this._markAerialPlacementClean();
+      this._editToolsExpanded = false;
       this._render();
     });
 
@@ -1601,7 +3258,7 @@ class S2JYarboMapCard extends HTMLElement {
     });
 
     body.querySelector('[data-action="edit-cancel"]')?.addEventListener("click", () => {
-      if (this._hasUnsavedPathwayDraftChanges()) {
+      if (this._hasUnsavedEditorChanges()) {
         this._openUnsavedChangesDialog("cancel-draft");
         return;
       }
@@ -1763,6 +3420,10 @@ class S2JYarboMapCard extends HTMLElement {
 
     event.preventDefault();
 
+    if (this._aerialCalibrationMode && this._handleAerialCalibrationWheel(svg, event)) {
+      return;
+    }
+
     if (this._editMode && event.ctrlKey && !event.shiftKey && this._resizeNoGoZoneFromWheel(event)) {
       return;
     }
@@ -1777,6 +3438,24 @@ class S2JYarboMapCard extends HTMLElement {
     const pointerX = viewBox.x + ((event.clientX - rect.left) / Math.max(rect.width, 1)) * viewBox.width;
     const pointerY = viewBox.y + ((event.clientY - rect.top) / Math.max(rect.height, 1)) * viewBox.height;
     this._zoom(factor, { x: pointerX, y: pointerY });
+  }
+
+  _handleAerialCalibrationWheel(svg, event) {
+    const anchor = this._displayPointFromSvgEvent(svg, event);
+    if (!anchor) {
+      return true;
+    }
+
+    const delta = this._wheelDominantDelta(event) * this._wheelModeScale(event);
+    if (event.ctrlKey) {
+      const deltaAngle = Math.max(-Math.PI / 18, Math.min(Math.PI / 18, -delta * 0.002));
+      this._rotateAerialOverlayAt(anchor, deltaAngle);
+      return true;
+    }
+
+    const scaleFactor = Math.max(0.96, Math.min(1.04, Math.exp(-delta * 0.00035)));
+    this._scaleAerialOverlayAt(anchor, scaleFactor);
+    return true;
   }
 
   _rotateSelectedOrDraftFromWheel(event) {
@@ -2003,6 +3682,13 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _startDrag(event) {
+    if (this._aerialCalibrationMode) {
+      if (event.shiftKey) {
+        this._startAerialImagePanDrag(event);
+      }
+      return;
+    }
+
     if (event.button === 0 && this._editContextMenu) {
       this._editContextMenu = null;
       this._render();
@@ -2048,6 +3734,36 @@ class S2JYarboMapCard extends HTMLElement {
     }
 
     this._startPanDrag(event);
+  }
+
+  _startAerialImagePanDrag(event) {
+    if (!(event.currentTarget instanceof SVGSVGElement) || event.button !== 0) {
+      return false;
+    }
+
+    const startPoint = this._displayPointFromSvgEvent(event.currentTarget, event);
+    if (!startPoint) {
+      return false;
+    }
+
+    event.preventDefault();
+    this._clearActiveDrag();
+    this._activeDrag = {
+      kind: "aerial-image-pan",
+      pointerId: event.pointerId,
+      startPoint,
+      lastPoint: startPoint,
+      dragged: false,
+      svg: event.currentTarget,
+    };
+
+    const canvas = this.shadowRoot?.querySelector(".map-canvas");
+    canvas?.classList.add("is-dragging");
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    window.addEventListener("pointermove", this._handlePointerMove);
+    window.addEventListener("pointerup", this._handlePointerUp);
+    window.addEventListener("pointercancel", this._handlePointerUp);
+    return true;
   }
 
   _startPanDrag(event, options = {}) {
@@ -2180,6 +3896,30 @@ class S2JYarboMapCard extends HTMLElement {
         : "Pathway moved. Click tick to save or cross to cancel.";
       drag.dragged = true;
       this._render();
+      const nextSvg = this.shadowRoot?.querySelector(".map-svg");
+      if (nextSvg instanceof SVGSVGElement) {
+        drag.svg = nextSvg;
+      }
+      const canvas = this.shadowRoot?.querySelector(".map-canvas");
+      canvas?.classList.add("is-dragging");
+      return;
+    }
+
+    if (drag.kind === "aerial-image-pan") {
+      const point = this._displayPointFromSvgEvent(drag.svg, event);
+      if (!point) {
+        return;
+      }
+
+      const deltaX = Number(point.x) - Number(drag.lastPoint.x);
+      const deltaY = Number(point.y) - Number(drag.lastPoint.y);
+      if (Math.hypot(deltaX, deltaY) < 0.000001) {
+        return;
+      }
+
+      drag.lastPoint = point;
+      drag.dragged = true;
+      this._translateAerialOverlay(deltaX, deltaY);
       const nextSvg = this.shadowRoot?.querySelector(".map-svg");
       if (nextSvg instanceof SVGSVGElement) {
         drag.svg = nextSvg;
@@ -3281,6 +5021,7 @@ class S2JYarboMapCard extends HTMLElement {
       return "";
     }
 
+    const busy = this._pathwayDraftSending || this._aerialOverlaySaving;
     return `
       <div class="map-edit-confirmation-backdrop">
         <div
@@ -3298,10 +5039,10 @@ class S2JYarboMapCard extends HTMLElement {
             </p>
           </div>
           <div class="map-unsaved-actions">
-            <button class="map-button is-active" type="button" data-action="unsaved-save" ${this._pathwayDraftSending ? "disabled" : ""}>Save</button>
+            <button class="map-button is-active" type="button" data-action="unsaved-save" ${busy ? "disabled" : ""}>Save</button>
             <div class="map-unsaved-actions-right">
-              <button class="map-button" type="button" data-action="unsaved-no" ${this._pathwayDraftSending ? "disabled" : ""}>No</button>
-              <button class="map-button" type="button" data-action="unsaved-yes" ${this._pathwayDraftSending ? "disabled" : ""}>Yes</button>
+              <button class="map-button" type="button" data-action="unsaved-no" ${busy ? "disabled" : ""}>No</button>
+              <button class="map-button" type="button" data-action="unsaved-yes" ${busy ? "disabled" : ""}>Yes</button>
             </div>
           </div>
         </div>
@@ -3550,7 +5291,7 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _handleBeforeUnload(event) {
-    if (!this._hasUnsavedPathwayDraftChanges()) {
+    if (!this._hasUnsavedEditorChanges()) {
       return undefined;
     }
 
@@ -3563,7 +5304,7 @@ class S2JYarboMapCard extends HTMLElement {
     if (
       !this.isConnected
       || event.defaultPrevented
-      || !this._hasUnsavedPathwayDraftChanges()
+      || !this._hasUnsavedEditorChanges()
       || this._unsavedChangesDialogOpen
       || event.button !== 0
       || event.metaKey
@@ -3660,7 +5401,7 @@ class S2JYarboMapCard extends HTMLElement {
       return;
     }
 
-    if (!this._hasUnsavedPathwayDraftChanges()) {
+    if (!this._hasUnsavedEditorChanges()) {
       this._navigationGuardCurrentUrl = nextUrl;
       return;
     }
@@ -3683,7 +5424,7 @@ class S2JYarboMapCard extends HTMLElement {
       || !this.isConnected
       || !url
       || this._unsavedChangesDialogOpen
-      || !this._hasUnsavedPathwayDraftChanges()
+      || !this._hasUnsavedEditorChanges()
     ) {
       return false;
     }
@@ -3893,6 +5634,11 @@ class S2JYarboMapCard extends HTMLElement {
     return currentSignature !== this._pathwayDraftOriginalSignature;
   }
 
+  _hasUnsavedEditorChanges() {
+    return this._hasUnsavedPathwayDraftChanges()
+      || this._hasUnsavedAerialPlacementChanges();
+  }
+
   _openUnsavedChangesDialog(action, options = {}) {
     this._unsavedChangesAction = action;
     this._unsavedChangesNavigationUrl = options.url || "";
@@ -3902,7 +5648,7 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _dismissUnsavedChangesDialog() {
-    if (this._pathwayDraftSending) {
+    if (this._pathwayDraftSending || this._aerialOverlaySaving) {
       return;
     }
 
@@ -3913,7 +5659,7 @@ class S2JYarboMapCard extends HTMLElement {
   }
 
   _confirmUnsavedChangesDiscard() {
-    if (this._pathwayDraftSending) {
+    if (this._pathwayDraftSending || this._aerialOverlaySaving) {
       return;
     }
 
@@ -3926,24 +5672,41 @@ class S2JYarboMapCard extends HTMLElement {
     this._unsavedChangesAfterSaveNavigationUrl = "";
 
     if (action === "exit-edit-mode") {
-      this._discardPathwayDraft({ notice: false, requestFreshMap: false, render: false });
+      if (this._hasUnsavedPathwayDraftChanges()) {
+        this._discardPathwayDraft({ notice: false, requestFreshMap: false, render: false });
+      }
+      if (this._hasUnsavedAerialPlacementChanges()) {
+        this._discardAerialPlacementChanges({ render: false });
+      }
       if (this._editMode) {
         this._toggleEditMode();
         return;
       }
+    } else if (action === "close-aerial-panel") {
+      this._discardAerialPlacementChanges({ render: false });
     } else if (action === "navigate" && navigationUrl) {
-      this._discardPathwayDraft({ notice: false, requestFreshMap: false, render: false });
+      if (this._hasUnsavedPathwayDraftChanges()) {
+        this._discardPathwayDraft({ notice: false, requestFreshMap: false, render: false });
+      }
+      if (this._hasUnsavedAerialPlacementChanges()) {
+        this._discardAerialPlacementChanges({ render: false });
+      }
       this._continueUnsavedNavigation(navigationUrl);
       return;
     } else {
-      this._discardPathwayDraft();
+      if (this._hasUnsavedPathwayDraftChanges()) {
+        this._discardPathwayDraft({ render: false });
+      }
+      if (this._hasUnsavedAerialPlacementChanges()) {
+        this._discardAerialPlacementChanges({ render: false });
+      }
     }
 
     this._render();
   }
 
-  _saveUnsavedChangesDialog() {
-    if (this._pathwayDraftSending) {
+  async _saveUnsavedChangesDialog() {
+    if (this._pathwayDraftSending || this._aerialOverlaySaving) {
       return;
     }
 
@@ -3954,6 +5717,17 @@ class S2JYarboMapCard extends HTMLElement {
     this._unsavedChangesNavigationUrl = "";
     this._unsavedChangesAfterSaveAction = action;
     this._unsavedChangesAfterSaveNavigationUrl = navigationUrl;
+    if (this._hasUnsavedAerialPlacementChanges() && !this._hasUnsavedPathwayDraftChanges()) {
+      const saved = await this._saveAerialCalibration();
+      if (saved) {
+        this._completePendingUnsavedSaveAction();
+      } else {
+        this._unsavedChangesAfterSaveAction = null;
+        this._unsavedChangesAfterSaveNavigationUrl = "";
+      }
+      return;
+    }
+
     this._acceptPathwayDraft();
   }
 
@@ -3964,6 +5738,14 @@ class S2JYarboMapCard extends HTMLElement {
     this._unsavedChangesAfterSaveNavigationUrl = "";
     if (action === "exit-edit-mode" && this._editMode) {
       this._toggleEditMode();
+      return true;
+    }
+    if (action === "close-aerial-panel") {
+      this._aerialPanelOpen = false;
+      this._aerialCalibrationMode = false;
+      this._aerialCalibrationTransform = null;
+      this._clearAerialPlacementDraft();
+      this._render();
       return true;
     }
     if (action === "navigate" && navigationUrl) {
@@ -4103,6 +5885,13 @@ class S2JYarboMapCard extends HTMLElement {
     this._editConfirmationError = "";
     if (!this._editMode) {
       this._editToolsExpanded = false;
+      this._aerialPanelOpen = false;
+      this._aerialCalibrationMode = false;
+      this._aerialCalibrationTransform = null;
+      this._aerialCalibrationDraft = [];
+      this._aerialPendingImagePoint = null;
+      this._aerialCalibrationStep = "image";
+      this._clearAerialPlacementDraft();
       this._activeEditTool = null;
       this._pathwayNameDialogOpen = false;
       this._pathwayDraftSending = false;
@@ -4152,7 +5941,7 @@ class S2JYarboMapCard extends HTMLElement {
 
   async _handleEditModeButtonClick() {
     if (this._editMode) {
-      if (this._hasUnsavedPathwayDraftChanges()) {
+      if (this._hasUnsavedEditorChanges()) {
         this._openUnsavedChangesDialog("exit-edit-mode");
         return;
       }
@@ -6874,4 +8663,21 @@ class S2JYarboMapCard extends HTMLElement {
 
 if (!customElements.get("s2jyarbo-map-widget")) {
   customElements.define("s2jyarbo-map-widget", S2JYarboMapCard);
+}
+
+if (!customElements.get("s2jyarbo-map-card")) {
+  customElements.define(
+    "s2jyarbo-map-card",
+    class S2JYarboStandaloneMapCard extends S2JYarboMapCard {},
+  );
+}
+
+window.customCards = window.customCards || [];
+if (!window.customCards.some((card) => card.type === "s2jyarbo-map-card")) {
+  window.customCards.push({
+    type: "s2jyarbo-map-card",
+    name: "S2JYarbo Map",
+    description: "S2JYarbo map view and map editing controls.",
+    preview: false,
+  });
 }

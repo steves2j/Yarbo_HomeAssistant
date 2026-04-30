@@ -4507,7 +4507,3 @@ class YarboOverviewCard extends HTMLElement {
 }
 
 window.S2JYarboBaseCard = YarboOverviewCard;
-
-if (!customElements.get("s2jyarbo-overview-card")) {
-  customElements.define("s2jyarbo-overview-card", YarboOverviewCard);
-}

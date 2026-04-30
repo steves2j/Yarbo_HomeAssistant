@@ -50,25 +50,34 @@ SAVE_MEMORY_PATH_SETTINGS_API_URL = "/api/s2jyarbo/save_memory_path_settings"
 SAVE_NOGOZONE_API_URL = "/api/s2jyarbo/save_nogozone"
 DELETE_NOGOZONE_API_URL = "/api/s2jyarbo/delete_nogozone"
 EDIT_ACKNOWLEDGEMENT_API_URL = "/api/s2jyarbo/edit_acknowledgement"
+AERIAL_OVERLAY_API_URL = "/api/s2jyarbo/aerial_overlay"
 PANEL_MODULE_NAME = "s2jyarbo-topics-panel"
-OVERVIEW_CARD_MODULE_NAME = "s2jyarbo-overview-card"
+BASE_CARD_MODULE_NAME = "s2jyarbo-base-card"
+CONTROL_CARD_MODULE_NAME = "s2jyarbo-control-card"
 MAP_CARD_MODULE_NAME = "s2jyarbo-map-card"
+ADVANCED_CARD_MODULE_NAME = "s2jyarbo-advanced-card"
 DEV_MAP_CARD_MODULE_NAME = "s2jyarbo-map-dev-card"
 STORAGE_VERSION = 1
 EDIT_ACKNOWLEDGEMENT_STORAGE_KEY = f"{DOMAIN}_edit_acknowledgements"
 EDIT_ACKNOWLEDGEMENT_ID = "dev_map_edit_warning_v1"
+AERIAL_OVERLAY_STORAGE_KEY = f"{DOMAIN}_aerial_overlays"
+MAX_AERIAL_IMAGE_DATA_LENGTH = 12_000_000
 
 
 async def async_register_panel(hass: HomeAssistant) -> None:
     """Register the S2JYarbo sidebar panel and supporting HTTP endpoints."""
     panel_dir = Path(__file__).parent / "panel"
     panel_module = panel_dir / f"{PANEL_MODULE_NAME}.js"
-    overview_module = panel_dir / f"{OVERVIEW_CARD_MODULE_NAME}.js"
+    base_module = panel_dir / f"{BASE_CARD_MODULE_NAME}.js"
+    control_module = panel_dir / f"{CONTROL_CARD_MODULE_NAME}.js"
     map_module = panel_dir / f"{MAP_CARD_MODULE_NAME}.js"
+    advanced_module = panel_dir / f"{ADVANCED_CARD_MODULE_NAME}.js"
     dev_map_module = panel_dir / f"{DEV_MAP_CARD_MODULE_NAME}.js"
     module_version = panel_module.stat().st_mtime_ns
-    overview_module_version = overview_module.stat().st_mtime_ns
+    base_module_version = base_module.stat().st_mtime_ns
+    control_module_version = control_module.stat().st_mtime_ns
     map_module_version = map_module.stat().st_mtime_ns
+    advanced_module_version = advanced_module.stat().st_mtime_ns
     dev_map_module_version = dev_map_module.stat().st_mtime_ns
     await hass.http.async_register_static_paths(
         [StaticPathConfig(PANEL_STATIC_URL, str(panel_dir), cache_headers=False)]
@@ -94,6 +103,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     hass.http.register_view(YarboSaveNoGoZoneView(hass))
     hass.http.register_view(YarboDeleteNoGoZoneView(hass))
     hass.http.register_view(YarboEditAcknowledgementView(hass))
+    hass.http.register_view(YarboAerialOverlayView(hass))
     frontend.add_extra_js_url(
         hass,
         f"{PANEL_STATIC_URL}/{MAP_CARD_MODULE_NAME}.js?v={map_module_version}",
@@ -104,7 +114,15 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     )
     frontend.add_extra_js_url(
         hass,
-        f"{PANEL_STATIC_URL}/{OVERVIEW_CARD_MODULE_NAME}.js?v={overview_module_version}",
+        f"{PANEL_STATIC_URL}/{BASE_CARD_MODULE_NAME}.js?v={base_module_version}",
+    )
+    frontend.add_extra_js_url(
+        hass,
+        f"{PANEL_STATIC_URL}/{CONTROL_CARD_MODULE_NAME}.js?v={control_module_version}",
+    )
+    frontend.add_extra_js_url(
+        hass,
+        f"{PANEL_STATIC_URL}/{ADVANCED_CARD_MODULE_NAME}.js?v={advanced_module_version}",
     )
 
     await panel_custom.async_register_panel(
@@ -197,11 +215,17 @@ class YarboDashboardView(HomeAssistantView):
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the dashboard API view."""
         self._hass = hass
+        self._aerial_overlay_store = Store[dict[str, Any]](
+            hass,
+            STORAGE_VERSION,
+            AERIAL_OVERLAY_STORAGE_KEY,
+        )
 
     async def get(self, request: web.Request) -> web.Response:
         """Return one dashboard card entry per Yarbo config entry."""
         entries: list[dict[str, Any]] = []
         runtimes: dict[str, YarboMqttClient] = self._hass.data.get(DOMAIN, {})
+        aerial_overlays = await self._aerial_overlay_store.async_load() or {}
         requested_entry_ids = _resolve_dashboard_entry_ids(
             self._hass,
             entry_id=request.query.get("entry_id"),
@@ -217,7 +241,16 @@ class YarboDashboardView(HomeAssistantView):
                 continue
 
             runtime = runtimes.get(entry.entry_id)
-            entries.append(_serialize_dashboard_entry(self._hass, entry, runtime))
+            entries.append(
+                _serialize_dashboard_entry(
+                    self._hass,
+                    entry,
+                    runtime,
+                    aerial_overlay=_normalize_aerial_overlay(
+                        aerial_overlays.get(entry.entry_id)
+                    ),
+                )
+            )
 
         return self.json(entries)
 
@@ -1192,6 +1225,93 @@ class YarboEditAcknowledgementView(HomeAssistantView):
         return acknowledgement
 
 
+class YarboAerialOverlayView(HomeAssistantView):
+    """Persist aerial image overlay calibration for a Yarbo map."""
+
+    url = AERIAL_OVERLAY_API_URL
+    name = "api:s2jyarbo:aerial_overlay"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the aerial overlay API view."""
+        self._hass = hass
+        self._store = Store[dict[str, Any]](
+            hass,
+            STORAGE_VERSION,
+            AERIAL_OVERLAY_STORAGE_KEY,
+        )
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return stored aerial overlay state for one Yarbo entry."""
+        entry_id = request.query.get("entry_id")
+        if not isinstance(entry_id, str) or not entry_id:
+            return web.Response(status=400, text="entry_id is required")
+
+        entry = _find_config_entry(self._hass, entry_id)
+        if entry is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        overlays = await self._store.async_load() or {}
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "aerial_overlay": _normalize_aerial_overlay(
+                    overlays.get(entry.entry_id)
+                ),
+            }
+        )
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Store aerial overlay image and calibration state for one Yarbo entry."""
+        payload = await request.json()
+        entry_id = payload.get("entry_id")
+        if not isinstance(entry_id, str):
+            return web.Response(status=400, text="entry_id is required")
+
+        entry = _find_config_entry(self._hass, entry_id)
+        if entry is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        try:
+            aerial_overlay = _normalize_aerial_overlay(payload.get("aerial_overlay"))
+        except ValueError as err:
+            return web.Response(status=400, text=str(err))
+
+        if aerial_overlay is None:
+            return web.Response(status=400, text="aerial_overlay is required")
+
+        aerial_overlay["updated_at"] = dt_util.utcnow().isoformat()
+        overlays = await self._store.async_load() or {}
+        overlays[entry.entry_id] = aerial_overlay
+        await self._store.async_save(overlays)
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "aerial_overlay": aerial_overlay,
+            }
+        )
+
+    async def delete(self, request: web.Request) -> web.Response:
+        """Delete stored aerial overlay state for one Yarbo entry."""
+        entry_id = request.query.get("entry_id")
+        if not isinstance(entry_id, str) or not entry_id:
+            return web.Response(status=400, text="entry_id is required")
+
+        entry = _find_config_entry(self._hass, entry_id)
+        if entry is None:
+            return web.Response(status=404, text="S2JYarbo entry not found")
+
+        overlays = await self._store.async_load() or {}
+        overlays.pop(entry.entry_id, None)
+        await self._store.async_save(overlays)
+        return self.json(
+            {
+                "entry_id": entry.entry_id,
+                "aerial_overlay": None,
+            }
+        )
+
+
 def _find_config_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry | None:
     """Return a S2JYarbo config entry by id."""
     return next(
@@ -1202,6 +1322,78 @@ def _find_config_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry | None
         ),
         None,
     )
+
+
+def _normalize_aerial_overlay(value: Any) -> dict[str, Any] | None:
+    """Normalize stored aerial overlay data."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("aerial_overlay must be an object")
+
+    image_data = value.get("image_data")
+    if image_data is not None:
+        if not isinstance(image_data, str) or not image_data.startswith("data:image/"):
+            raise ValueError("aerial_overlay.image_data must be an image data URL")
+        if len(image_data) > MAX_AERIAL_IMAGE_DATA_LENGTH:
+            raise ValueError("aerial_overlay.image_data is too large")
+
+    image_width = _coerce_float(value.get("image_width"))
+    image_height = _coerce_float(value.get("image_height"))
+    opacity = _coerce_float(value.get("opacity"))
+    if opacity is None:
+        opacity = 0.62
+
+    points = []
+    raw_points = value.get("points")
+    if isinstance(raw_points, list):
+        for item in raw_points[:20]:
+            if not isinstance(item, dict):
+                continue
+            image = item.get("image")
+            map_point = item.get("map")
+            if not isinstance(image, dict) or not isinstance(map_point, dict):
+                continue
+
+            image_x = _coerce_float(image.get("x"))
+            image_y = _coerce_float(image.get("y"))
+            map_x = _coerce_float(map_point.get("x"))
+            map_y = _coerce_float(map_point.get("y"))
+            if None in (image_x, image_y, map_x, map_y):
+                continue
+
+            points.append(
+                {
+                    "image": {"x": image_x, "y": image_y},
+                    "map": {"x": map_x, "y": map_y},
+                }
+            )
+
+    transform = None
+    raw_transform = value.get("transform")
+    if isinstance(raw_transform, dict):
+        transform_values = {
+            key: _coerce_float(raw_transform.get(key))
+            for key in ("a", "b", "c", "d", "e", "f")
+        }
+        if all(item is not None for item in transform_values.values()):
+            transform_g = _coerce_float(raw_transform.get("g"))
+            transform_h = _coerce_float(raw_transform.get("h"))
+            if transform_g is not None:
+                transform_values["g"] = transform_g
+            if transform_h is not None:
+                transform_values["h"] = transform_h
+            transform = transform_values
+
+    return {
+        "image_data": image_data,
+        "image_width": image_width,
+        "image_height": image_height,
+        "opacity": max(0.05, min(1, opacity)),
+        "points": points,
+        "transform": transform,
+        "updated_at": value.get("updated_at") if isinstance(value.get("updated_at"), str) else None,
+    }
 
 
 def _serialize_entry(
@@ -1269,6 +1461,8 @@ def _serialize_dashboard_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     runtime: YarboMqttClient | None,
+    *,
+    aerial_overlay: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Serialize a Yarbo entry for the Overview dashboard card."""
     state = runtime.state if runtime is not None else None
@@ -1288,6 +1482,7 @@ def _serialize_dashboard_entry(
         "cloud_points_feedback": _extract_cloud_points_feedback(state.topic_samples) if state else None,
         "recharge_feedback": _extract_recharge_feedback(state.topic_samples) if state else None,
         "wifi": _extract_wifi_details(state.topic_samples) if state else None,
+        "aerial_overlay": aerial_overlay,
         "notification_count": state.notification_count if state else 0,
         "last_notification": state.last_notification if state else None,
         "recent_notifications": state.notification_history[-5:] if state else [],
