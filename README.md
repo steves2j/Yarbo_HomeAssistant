@@ -1,5 +1,7 @@
 # S2JYarbo Home Assistant
 
+!!!!Due to the recent security issue with all Yarbo's, the way we interface with the Yarbo is in flux. Until this has been tied down, Expect this Module to not work with your Yarbo. We'll try and keep up to date on this evolving issue and fix things as and when then become available.!!!! 
+
 Home Assistant custom integration workspace for Yarbo devices using MQTT, published under the `s2jyarbo` domain to avoid conflicts with other Yarbo integrations.
 
 This integration allows a user to view the current map of a YArbo, start and stop plans, Edit and Add No Go Zones and Pathways. More to come. 
